@@ -70,7 +70,7 @@ where
     where
         EF: ExtensionField<F>,
     {
-        ParsedCommitment::<F, EF>::parse(verifier_state, self.num_variables, self.committment_ood_samples)
+        ParsedCommitment::<F, EF>::parse(verifier_state, self.num_variables, self.commitment_ood_samples)
     }
 }
 
@@ -177,8 +177,7 @@ where
             .iter()
             .all(|c| verify_constraint_coeffs(c, &final_coefficients))
             .then_some(())
-            .ok_or(ProofError::InvalidProof)
-            .unwrap();
+            .ok_or(ProofError::InvalidProof)?;
 
         let final_sumcheck_randomness =
             verify_sumcheck_rounds::<F, EF>(verifier_state, &mut claimed_sum, self.final_sumcheck_rounds, 0)?;
@@ -412,13 +411,8 @@ where
     let mut randomness = Vec::with_capacity(rounds);
 
     for _ in 0..rounds {
-        // Extract the 3 evaluations of the quadratic sumcheck polynomial h(X)
-        let poly = DensePolynomial::new(verifier_state.next_extension_scalars_vec(3)?);
-
-        // Verify claimed sum is consistent with polynomial
-        if poly.evaluate(EF::ZERO) + poly.evaluate(EF::ONE) != *claimed_sum {
-            return Err(ProofError::InvalidProof);
-        }
+        let coeffs = verifier_state.next_sumcheck_polynomial(3, *claimed_sum, None)?;
+        let poly = DensePolynomial::new(coeffs);
 
         verifier_state.check_pow_grinding(pow_bits)?;
 

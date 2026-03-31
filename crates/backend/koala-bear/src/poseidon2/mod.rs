@@ -13,8 +13,8 @@ pub use external::*;
 use field::{Algebra, InjectiveMonomial, PrimeField, PrimeField64};
 pub use generic::*;
 pub use internal::*;
-use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
+use rand::{Rng, RngExt};
 pub use round_numbers::poseidon2_round_numbers_128;
 
 const SUPPORTED_WIDTHS: [usize; 8] = [2, 3, 4, 8, 12, 16, 20, 24];
@@ -94,12 +94,12 @@ impl<F: PrimeField + InjectiveMonomial<D>, ExternalPerm, InternalPerm, const WID
         ExternalPerm: ExternalLayer<A, WIDTH, D>,
         InternalPerm: InternalLayer<A, WIDTH, D>,
     {
-        let initial_state = state.clone();
+        let initial_state = *state;
         self.external_layer.permute_state_initial(state);
         self.internal_layer.permute_state(state);
         self.external_layer.permute_state_terminal(state);
         state.iter_mut().zip(initial_state).for_each(|(s, i)| {
-            *s = s.clone() + i;
+            *s += i;
         });
     }
 }

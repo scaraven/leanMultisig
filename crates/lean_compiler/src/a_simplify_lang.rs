@@ -83,11 +83,6 @@ pub enum SimpleLine {
         else_branch: Vec<Self>,
         location: SourceLocation,
     },
-    AssertZero {
-        operation: MathOperation,
-        arg0: SimpleExpr,
-        arg1: SimpleExpr,
-    },
     FunctionCall {
         function_name: String,
         args: Vec<SimpleExpr>,
@@ -158,7 +153,6 @@ impl SimpleLine {
             Self::ForwardDeclaration { .. }
             | Self::Assignment { .. }
             | Self::RawAccess { .. }
-            | Self::AssertZero { .. }
             | Self::FunctionCall { .. }
             | Self::FunctionRet { .. }
             | Self::Precompile { .. }
@@ -184,7 +178,6 @@ impl SimpleLine {
             Self::ForwardDeclaration { .. }
             | Self::Assignment { .. }
             | Self::RawAccess { .. }
-            | Self::AssertZero { .. }
             | Self::FunctionCall { .. }
             | Self::FunctionRet { .. }
             | Self::Precompile { .. }
@@ -203,7 +196,7 @@ impl SimpleLine {
     /// (excludes assignment target vars, includes everything the compiler resolves).
     pub(crate) fn operand_exprs(&self) -> Vec<&SimpleExpr> {
         match self {
-            Self::Assignment { arg0, arg1, .. } | Self::AssertZero { arg0, arg1, .. } => {
+            Self::Assignment { arg0, arg1, .. } => {
                 vec![arg0, arg1]
             }
             Self::RawAccess { res, index, .. } => vec![res, index],
@@ -1203,9 +1196,10 @@ fn transform_mutable_in_loops_in_lines(
                 start,
                 end,
                 body,
-                loop_kind: LoopKind::Range,
+                loop_kind: loop_kind @ (LoopKind::Range | LoopKind::ParallelRange),
                 location,
             } => {
+                let loop_kind = loop_kind.clone();
                 transform_mutable_in_loops_in_lines(body, const_arrays, counter);
                 let modified_vars = find_modified_external_vars(body, const_arrays);
 
@@ -1351,7 +1345,7 @@ fn transform_mutable_in_loops_in_lines(
                     start: start.clone(),
                     end: end.clone(),
                     body: new_body,
-                    loop_kind: LoopKind::Range,
+                    loop_kind,
                     location,
                 });
 
@@ -2640,9 +2634,11 @@ fn simplify_lines(
                 location,
             } => {
                 assert!(
-                    matches!(loop_kind, LoopKind::Range),
+                    matches!(loop_kind, LoopKind::Range | LoopKind::ParallelRange),
                     "Unrolled/dynamic_unroll loops should have been handled already"
                 );
+
+                let is_parallel = loop_kind.is_parallel();
 
                 let mut loop_const_malloc = ConstMalloc {
                     counter: const_malloc.counter,
@@ -2660,7 +2656,8 @@ fn simplify_lines(
                 const_malloc.counter = loop_const_malloc.counter;
                 state.array_manager.valid = valid_aux_vars_in_array_manager_before; // restore the valid aux vars
 
-                let func_name = format!("@loop_{}_{}", state.counters.loops.get_next(), location);
+                let loop_prefix = if is_parallel { "@parallel_loop" } else { "@loop" };
+                let func_name = format!("{}_{}_{}", loop_prefix, state.counters.loops.get_next(), location);
 
                 // Find variables used inside loop but defined outside
                 let (_, mut external_vars) = find_variable_usage(body, ctx.const_arrays);
@@ -3913,9 +3910,6 @@ impl SimpleLine {
             }
             Self::RawAccess { res, index, shift } => {
                 format!("{res} = memory[{index} + {shift}]")
-            }
-            Self::AssertZero { operation, arg0, arg1 } => {
-                format!("0 = {arg0} {operation} {arg1}")
             }
             Self::IfNotZero {
                 condition,

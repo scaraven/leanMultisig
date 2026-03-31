@@ -1,11 +1,12 @@
 use std::any::TypeId;
 
-use crate::{tables::poseidon_16::trace_gen::default_poseidon_row, *};
+use crate::execution::memory::MemoryAccess;
+use crate::*;
 use backend::*;
 use utils::{ToUsize, poseidon16_compress};
 
 mod trace_gen;
-pub use trace_gen::fill_trace_poseidon_16;
+pub use trace_gen::{default_poseidon_row, fill_trace_poseidon_16};
 
 pub(super) const WIDTH: usize = 16;
 const HALF_INITIAL_FULL_ROUNDS: usize = KOALABEAR_RC16_EXTERNAL_INITIAL.len() / 2;
@@ -26,7 +27,7 @@ pub struct Poseidon16Precompile<const BUS: bool>;
 
 impl<const BUS: bool> TableT for Poseidon16Precompile<BUS> {
     fn name(&self) -> &'static str {
-        "poseidon16"
+        "poseidon16_compress"
     }
 
     fn table(&self) -> Table {
@@ -65,18 +66,19 @@ impl<const BUS: bool> TableT for Poseidon16Precompile<BUS> {
     }
 
     fn padding_row(&self) -> Vec<F> {
-        default_poseidon_row()
+        // depends on null_poseidon_16_hash_ptr (cf lean_prover/trace_gen.rs)
+        unreachable!()
     }
 
     #[inline(always)]
-    fn execute(
+    fn execute<M: MemoryAccess>(
         &self,
         arg_a: F,
         arg_b: F,
         index_res_a: F,
         _: usize,
         _: usize,
-        ctx: &mut InstructionContext<'_>,
+        ctx: &mut InstructionContext<'_, M>,
     ) -> Result<(), RunnerError> {
         let trace = ctx.traces.get_mut(&self.table()).unwrap();
 
@@ -87,24 +89,18 @@ impl<const BUS: bool> TableT for Poseidon16Precompile<BUS> {
         input[..DIGEST_LEN].copy_from_slice(&arg0);
         input[DIGEST_LEN..].copy_from_slice(&arg1);
 
-        let output = match ctx.poseidon16_precomputed.get(*ctx.n_poseidon16_precomputed_used) {
-            Some(precomputed) if precomputed.0 == input => {
-                *ctx.n_poseidon16_precomputed_used += 1;
-                precomputed.1
-            }
-            _ => poseidon16_compress(input),
-        };
+        let output = poseidon16_compress(input);
 
         let res_a: [F; DIGEST_LEN] = output[..DIGEST_LEN].try_into().unwrap();
 
         ctx.memory.set_slice(index_res_a.to_usize(), &res_a)?;
 
-        trace.base[POSEIDON_16_COL_FLAG].push(F::ONE);
-        trace.base[POSEIDON_16_COL_A].push(arg_a);
-        trace.base[POSEIDON_16_COL_B].push(arg_b);
-        trace.base[POSEIDON_16_COL_RES].push(index_res_a);
+        trace.columns[POSEIDON_16_COL_FLAG].push(F::ONE);
+        trace.columns[POSEIDON_16_COL_A].push(arg_a);
+        trace.columns[POSEIDON_16_COL_B].push(arg_b);
+        trace.columns[POSEIDON_16_COL_RES].push(index_res_a);
         for (i, value) in input.iter().enumerate() {
-            trace.base[POSEIDON_16_COL_INPUT_START + i].push(*value);
+            trace.columns[POSEIDON_16_COL_INPUT_START + i].push(*value);
         }
 
         // the rest of the trace is filled at the end of the execution (to get parallelism + SIMD)
@@ -128,9 +124,9 @@ impl<const BUS: bool> Air for Poseidon16Precompile<BUS> {
         BUS as usize + 76
     }
     fn eval<AB: AirBuilder>(&self, builder: &mut AB, extra_data: &Self::ExtraData) {
-        let cols: Poseidon2Cols<AB::F> = {
+        let cols: Poseidon2Cols<AB::IF> = {
             let up = builder.up();
-            let (prefix, shorts, suffix) = unsafe { up.align_to::<Poseidon2Cols<AB::F>>() };
+            let (prefix, shorts, suffix) = unsafe { up.align_to::<Poseidon2Cols<AB::IF>>() };
             debug_assert!(prefix.is_empty(), "Alignment should match");
             debug_assert!(suffix.is_empty(), "Alignment should match");
             debug_assert_eq!(shorts.len(), 1);
@@ -141,25 +137,25 @@ impl<const BUS: bool> Air for Poseidon16Precompile<BUS> {
         if BUS {
             builder.eval_virtual_column(eval_virtual_bus_column::<AB, EF>(
                 extra_data,
-                cols.flag.clone(),
+                cols.flag,
                 &[
-                    AB::F::from_usize(POSEIDON_PRECOMPILE_DATA),
-                    cols.index_a.clone(),
-                    cols.index_b.clone(),
-                    cols.index_res.clone(),
+                    AB::IF::from_usize(POSEIDON_PRECOMPILE_DATA),
+                    cols.index_a,
+                    cols.index_b,
+                    cols.index_res,
                 ],
             ));
         } else {
             builder.declare_values(std::slice::from_ref(&cols.flag));
             builder.declare_values(&[
-                AB::F::from_usize(POSEIDON_PRECOMPILE_DATA),
-                cols.index_a.clone(),
-                cols.index_b.clone(),
-                cols.index_res.clone(),
+                AB::IF::from_usize(POSEIDON_PRECOMPILE_DATA),
+                cols.index_a,
+                cols.index_b,
+                cols.index_res,
             ]);
         }
 
-        builder.assert_bool(cols.flag.clone());
+        builder.assert_bool(cols.flag);
 
         eval(builder, &cols)
     }
@@ -180,8 +176,8 @@ pub(super) struct Poseidon2Cols<T> {
     pub outputs: [T; WIDTH / 2],
 }
 
-fn eval<AB: AirBuilder>(builder: &mut AB, local: &Poseidon2Cols<AB::F>) {
-    let mut state: [_; WIDTH] = local.inputs.clone();
+fn eval<AB: AirBuilder>(builder: &mut AB, local: &Poseidon2Cols<AB::IF>) {
+    let mut state: [_; WIDTH] = local.inputs;
 
     GenericPoseidon2LinearLayersKoalaBear::external_linear_layer(&mut state);
 
@@ -225,8 +221,8 @@ pub const fn num_cols_poseidon_16() -> usize {
 
 #[inline]
 fn eval_2_full_rounds<AB: AirBuilder>(
-    state: &mut [AB::F; WIDTH],
-    post_full_round: &[AB::F; WIDTH],
+    state: &mut [AB::IF; WIDTH],
+    post_full_round: &[AB::IF; WIDTH],
     round_constants_1: &[F; WIDTH],
     round_constants_2: &[F; WIDTH],
     builder: &mut AB,
@@ -242,16 +238,16 @@ fn eval_2_full_rounds<AB: AirBuilder>(
     }
     GenericPoseidon2LinearLayersKoalaBear::external_linear_layer(state);
     for (state_i, post_i) in state.iter_mut().zip(post_full_round) {
-        builder.assert_eq(state_i.clone(), post_i.clone());
-        *state_i = post_i.clone();
+        builder.assert_eq(*state_i, *post_i);
+        *state_i = *post_i;
     }
 }
 
 #[inline]
 fn eval_last_2_full_rounds<AB: AirBuilder>(
-    initial_state: &[AB::F; WIDTH],
-    state: &mut [AB::F; WIDTH],
-    outputs: &[AB::F; WIDTH / 2],
+    initial_state: &[AB::IF; WIDTH],
+    state: &mut [AB::IF; WIDTH],
+    outputs: &[AB::IF; WIDTH / 2],
     round_constants_1: &[F; WIDTH],
     round_constants_2: &[F; WIDTH],
     builder: &mut AB,
@@ -268,26 +264,26 @@ fn eval_last_2_full_rounds<AB: AirBuilder>(
     GenericPoseidon2LinearLayersKoalaBear::external_linear_layer(state);
     // add inputs to outputs (for compression)
     for (state_i, init_state_i) in state.iter_mut().zip(initial_state) {
-        *state_i += init_state_i.clone();
+        *state_i += *init_state_i;
     }
     for (state_i, output_i) in state.iter_mut().zip(outputs) {
-        builder.assert_eq(state_i.clone(), output_i.clone());
-        *state_i = output_i.clone();
+        builder.assert_eq(*state_i, *output_i);
+        *state_i = *output_i;
     }
 }
 
 #[inline]
 fn eval_partial_round<AB: AirBuilder>(
-    state: &mut [AB::F; WIDTH],
-    post_partial_round: &AB::F,
+    state: &mut [AB::IF; WIDTH],
+    post_partial_round: &AB::IF,
     round_constant: F,
     builder: &mut AB,
 ) {
     add_koala_bear(&mut state[0], round_constant);
     state[0] = state[0].cube();
 
-    builder.assert_eq(state[0].clone(), post_partial_round.clone());
-    state[0] = post_partial_round.clone();
+    builder.assert_eq(state[0], *post_partial_round);
+    state[0] = *post_partial_round;
 
     GenericPoseidon2LinearLayersKoalaBear::internal_linear_layer(state);
 }

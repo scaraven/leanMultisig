@@ -99,10 +99,6 @@ where
         value: field_to_array(PF::NEG_ONE),
     };
 
-    const INVERSE_OF_TWO: Self = Self {
-        value: field_to_array(PF::INVERSE_OF_TWO),
-    };
-
     #[inline]
     fn from_prime_subfield(val: Self::PrimeSubfield) -> Self {
         PF::from_prime_subfield(val).into()
@@ -484,18 +480,18 @@ where
 
 /// Add two vectors element wise.
 #[inline]
-pub fn vector_add<R: PrimeCharacteristicRing + Add<R2, Output = R>, R2: Clone, const D: usize>(
+pub fn vector_add<R: PrimeCharacteristicRing + Add<R2, Output = R>, R2: Copy, const D: usize>(
     a: &[R; D],
     b: &[R2; D],
 ) -> [R; D] {
-    array::from_fn(|i| a[i].clone() + b[i].clone())
+    array::from_fn(|i| a[i] + b[i])
 }
 
 /// Subtract two vectors element wise.
 #[inline]
-pub fn vector_sub<R: PrimeCharacteristicRing + Sub<R2, Output = R>, R2: Clone, const D: usize>(
+pub fn vector_sub<R: PrimeCharacteristicRing + Sub<R2, Output = R>, R2: Copy, const D: usize>(
     a: &[R; D],
     b: &[R2; D],
 ) -> [R; D] {
-    array::from_fn(|i| a[i].clone() - b[i].clone())
+    array::from_fn(|i| a[i] - b[i])
 }

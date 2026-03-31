@@ -2,9 +2,10 @@ use std::collections::BTreeMap;
 
 use crate::*;
 use air::verify_air;
+use backend::{Proof, RawProof, VerifierState};
 use lean_vm::*;
 use sub_protocols::*;
-use utils::ToUsize;
+use utils::{ToUsize, get_poseidon16};
 
 #[derive(Debug, Clone)]
 pub struct ProofVerificationDetails {
@@ -14,18 +15,23 @@ pub struct ProofVerificationDetails {
 pub fn verify_execution(
     bytecode: &Bytecode,
     public_input: &[F],
-    proof: RawProof<F>,
-) -> Result<ProofVerificationDetails, ProofError> {
-    let mut verifier_state = VerifierState::<EF, _>::new(proof, get_poseidon16().clone());
-
+    proof: Proof<F>,
+) -> Result<(ProofVerificationDetails, RawProof<F>), ProofError> {
+    let mut verifier_state = VerifierState::<EF, _>::new(proof, get_poseidon16().clone())?;
+    verifier_state.observe_scalars(public_input);
+    verifier_state.observe_scalars(&poseidon16_compress_pair(&bytecode.hash, &SNARK_DOMAIN_SEP));
     let dims = verifier_state
-        .next_base_scalars_vec(2 + N_TABLES)?
+        .next_base_scalars_vec(3 + N_TABLES)?
         .into_iter()
         .map(|x| x.to_usize())
         .collect::<Vec<_>>();
     let log_inv_rate = dims[0];
     let log_memory = dims[1];
-    let table_n_vars: BTreeMap<Table, VarCount> = (0..N_TABLES).map(|i| (ALL_TABLES[i], dims[i + 2])).collect();
+    let public_input_len = dims[2]; // enforce the exact length of the public input to pass through Fiat Shamir (otherwise we could have 2 public inputs, only differing by a few (<8) zeros in the end, leading to the same fiat shamir state: tipically giving the advseary 2 or 3 bits of advantage in the subsequent part where the public input is evaluated as a multilinear polynomial)
+    if public_input_len != public_input.len() {
+        return Err(ProofError::InvalidProof);
+    }
+    let table_n_vars: BTreeMap<Table, VarCount> = (0..N_TABLES).map(|i| (ALL_TABLES[i], dims[i + 3])).collect();
     if !(MIN_WHIR_LOG_INV_RATE..=MAX_WHIR_LOG_INV_RATE).contains(&log_inv_rate) {
         return Err(ProofError::InvalidProof);
     }
@@ -64,7 +70,7 @@ pub fn verify_execution(
     )?;
 
     let logup_c = verifier_state.sample();
-    let logup_alphas = verifier_state.sample_vec(log2_ceil_usize(max_bus_width()));
+    let logup_alphas = verifier_state.sample_vec(log2_ceil_usize(max_bus_width_including_domainsep()));
     let logup_alphas_eq_poly = eval_eq(&logup_alphas);
 
     let logup_statements = verify_generic_logup(
@@ -155,9 +161,12 @@ pub fn verify_execution(
         global_statements_base,
     )?;
 
-    Ok(ProofVerificationDetails {
-        bytecode_evaluation: logup_statements.bytecode_evaluation.unwrap(),
-    })
+    Ok((
+        ProofVerificationDetails {
+            bytecode_evaluation: logup_statements.bytecode_evaluation.unwrap(),
+        },
+        verifier_state.into_raw_proof(),
+    ))
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -1,6 +1,8 @@
 use field::ExtensionField;
 
-use crate::{MerkleOpening, MerklePath, PF, ProofError, flatten_scalars_to_base, pack_scalars_to_extension};
+use crate::{
+    MerkleOpening, MerklePath, PF, ProofError, ProofResult, flatten_scalars_to_base, pack_scalars_to_extension,
+};
 
 pub trait ChallengeSampler<EF> {
     fn sample_vec(&mut self, len: usize) -> Vec<EF>;
@@ -13,8 +15,10 @@ pub trait ChallengeSampler<EF> {
 pub trait FSProver<EF: ExtensionField<PF<EF>>>: ChallengeSampler<EF> {
     fn state(&self) -> String;
     fn add_base_scalars(&mut self, scalars: &[PF<EF>]);
+    fn observe_scalars(&mut self, scalars: &[PF<EF>]);
     fn pow_grinding(&mut self, bits: usize);
     fn hint_merkle_paths_base(&mut self, paths: Vec<MerklePath<PF<EF>, PF<EF>>>);
+    fn add_sumcheck_polynomial(&mut self, coeffs: &[EF], eq_alpha: Option<EF>);
 
     fn add_extension_scalars(&mut self, scalars: &[EF]) {
         self.add_base_scalars(&flatten_scalars_to_base(scalars));
@@ -41,8 +45,15 @@ pub trait FSProver<EF: ExtensionField<PF<EF>>>: ChallengeSampler<EF> {
 pub trait FSVerifier<EF: ExtensionField<PF<EF>>>: ChallengeSampler<EF> {
     fn state(&self) -> String;
     fn next_base_scalars_vec(&mut self, n: usize) -> Result<Vec<PF<EF>>, ProofError>;
+    fn observe_scalars(&mut self, scalars: &[PF<EF>]);
     fn next_merkle_opening(&mut self) -> Result<MerkleOpening<PF<EF>>, ProofError>;
     fn check_pow_grinding(&mut self, bits: usize) -> Result<(), ProofError>;
+    fn next_sumcheck_polynomial(
+        &mut self,
+        n_coeffs: usize,
+        claimed_sum: EF,
+        eq_alpha: Option<EF>,
+    ) -> ProofResult<Vec<EF>>;
 
     fn next_extension_scalars_vec(&mut self, n: usize) -> Result<Vec<EF>, ProofError> {
         Ok(pack_scalars_to_extension(

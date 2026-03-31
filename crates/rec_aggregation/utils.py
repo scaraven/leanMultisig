@@ -6,6 +6,7 @@ F_BITS = 31  # koala-bear = 31 bits
 TWO_ADICITY = 24
 ROOT = 1791270792  # of order 2^TWO_ADICITY
 
+
 def div_ceil_dynamic(a, b: Const):
     debug_assert(a <= 150)
     res = match_range(a, range(0, 151), lambda i: div_ceil(i, b))
@@ -18,7 +19,8 @@ def powers(alpha, n):
     # n: F
     assert n < 256
     assert 0 < n
-    res = match_range(n, range(1, 256), lambda i: powers_const(alpha, i))
+    # 2**log2_ceil(i) is not really necessary but helps reduce byetcode size (traedoff cycles / bytecode size)
+    res = match_range(n, range(1, 256), lambda i: powers_const(alpha, 2**log2_ceil(i)))
     return res
 
 
@@ -32,9 +34,10 @@ def powers_const(alpha, n: Const):
         mul_extension(res + i * DIM, alpha, res + (i + 1) * DIM)
     return res
 
+
 def poly_eq_extension_dynamic(point, n):
     debug_assert(n < 9)
-    res = match_range(n, range(0, 1), lambda i: ONE_EF_PTR, range(1, 9), lambda i: poly_eq_extension(point, i))
+    res = match_range(n, range(0, 1), lambda _: ONE_EF_PTR, range(1, 9), lambda i: poly_eq_extension(point, i))
     return res
 
 
@@ -55,20 +58,21 @@ def poly_eq_extension(point, n: Const):
             )
     return res + (2**n - 1) * DIM
 
+
 def eq_mle_extension(a, b, n):
-    debug_assert(n < 30)
+    debug_assert(n < 33)
     debug_assert(0 < n)
     res = Array(DIM)
-    match_range(n, range(1, 30), lambda i: poly_eq_ee(a, b, res, i))
+    match_range(n, range(1, 33), lambda i: poly_eq_ee(a, b, res, i))
     return res
 
 
 @inline
 def eq_mle_base_extension(a, b, n):
-    debug_assert(n <= 30)
+    debug_assert(n < 33)
     debug_assert(0 < n)
     res = Array(DIM)
-    match_range(n, range(1, 31), lambda i: poly_eq_be(a, b, res, i))
+    match_range(n, range(1, 33), lambda i: poly_eq_be(a, b, res, i))
     return res
 
 
@@ -80,11 +84,12 @@ def eq_mle_extension_base_const(a, b, n: Const):
     poly_eq_be(a, b, res, n)
     return res
 
+
 @inline
 def expand_from_univariate_base(alpha, n):
-    debug_assert(n < 23)
+    debug_assert(n < 33)
     debug_assert(0 < n)
-    res = match_range(n, range(1, 23), lambda i: expand_from_univariate_base_const(alpha, i))
+    res = match_range(n, range(1, 33), lambda i: expand_from_univariate_base_const(alpha, i))
     return res
 
 
@@ -162,7 +167,7 @@ def mle_of_01234567_etc(point, n):
         e = mle_of_01234567_etc(point + DIM, n - 1)
         a = one_minus_self_extension_ret(point)
         b = mul_extension_ret(a, e)
-        power_of_2 = powers_of_two(n - 1)
+        power_of_2 = two_exp(n - 1)
         c = add_base_extension_ret(power_of_2, e)
         d = mul_extension_ret(point, c)
         res = add_extension_ret(b, d)
@@ -179,7 +184,7 @@ def range_check_power_of_2(a, n_bits: Const):
         hi: Imu
         hint_decompose_16(a, lo, hi)
         assert lo < 2**16
-        assert hi < 2**(n_bits - 16)
+        assert hi < 2 ** (n_bits - 16)
         assert a == lo + hi * 2**16
     return
 
@@ -208,9 +213,9 @@ def maximum(a, b):
 
 
 @inline
-def powers_of_two(n):
-    debug_assert(n < 32)
-    res = match_range(n, range(0, 32), lambda i: 2**i)
+def two_exp(n):
+    debug_assert(n < 33)
+    res = match_range(n, range(0, 33), lambda i: 2**i)
     return res
 
 
@@ -441,6 +446,7 @@ def checked_decompose_bits(a):
     assert a == partial_sums_24[23] + sum_7 * 2**24
     return bits, partial_sums_24
 
+
 @inline
 def checked_decompose_bits_and_compute_root_pow_const(a, domain_size):
     # Hint 6 nibbles (4 bits each) + 1 top-7-bit value = 7 hints
@@ -467,13 +473,15 @@ def checked_decompose_bits_and_compute_root_pow_const(a, domain_size):
     # Compute domain_generator^index
     prod: Mut = 1
     for k in unroll(0, (domain_size - domain_size % 4) / 4):
-        nib_pow = match_range(nibbles[k], range(0, 16),
-            lambda v: ROOT ** (2 ** (TWO_ADICITY - domain_size + 4 * k) * v))
+        nib_pow = match_range(nibbles[k], range(0, 16), lambda v: ROOT ** (2 ** (TWO_ADICITY - domain_size + 4 * k) * v))
         prod *= nib_pow
 
     if domain_size % 4 != 0:
-        edge_pow = match_range(nibbles[(domain_size - domain_size % 4) / 4], range(0, 16),
-            lambda v: ROOT ** (2 ** (TWO_ADICITY - domain_size + 4 * ((domain_size - domain_size % 4) / 4)) * (v % 2 ** (domain_size % 4))))
+        edge_pow = match_range(
+            nibbles[(domain_size - domain_size % 4) / 4],
+            range(0, 16),
+            lambda v: ROOT ** (2 ** (TWO_ADICITY - domain_size + 4 * ((domain_size - domain_size % 4) / 4)) * (v % 2 ** (domain_size % 4))),
+        )
         prod *= edge_pow
 
     return nibbles, prod
@@ -494,13 +502,13 @@ def checked_decompose_bits_small_value_const(to_decompose, n_bits: Const):
 
 @inline
 def checked_decompose_bits_small_value(to_decompose, n_bits):
-    debug_assert(n_bits < 30)
+    debug_assert(n_bits < 31)
     debug_assert(0 < n_bits)
     return match_range(
         n_bits,
         range(0, 1),
         lambda _: 0,
-        range(1, 30),
+        range(1, 31),
         lambda i: checked_decompose_bits_small_value_const(to_decompose, i),
     )
 
@@ -508,7 +516,7 @@ def checked_decompose_bits_small_value(to_decompose, n_bits):
 @inline
 def dot_product_ee_ret(a, b, n):
     res = Array(DIM)
-    dot_product_ee_dynamic(a, b, res, n)
+    dot_product_ee(a, b, res, n)
     return res
 
 
@@ -528,7 +536,7 @@ def mle_of_zeros_then_ones(point, n_zeros, n_vars):
             res[i] = 0
         return res
 
-    n_values = powers_of_two(n_vars)
+    n_values = two_exp(n_vars)
     debug_assert(n_zeros <= n_values)
 
     if n_zeros == n_values:
@@ -617,7 +625,7 @@ def _verify_log2_small(n, partial_sums_24, log2: Const):
 def _verify_log2_large(n, log2: Const):
     # For log2 in [24, 30]: verify 2^(log2-1) < n <= 2^log2
     # by checking that n - 2^(log2-1) - 1 fits in (log2-1) bits
-    remainder = n - 2**(log2 - 1) - 1
+    remainder = n - 2 ** (log2 - 1) - 1
     _unused = checked_decompose_bits_small_value_const(remainder, log2 - 1)
     return
 
@@ -627,12 +635,7 @@ def log2_ceil_runtime(n):
     log2: Imu
     hint_log2_ceil(n, log2)
     assert log2 < 31
-    if powers_of_two(log2) != n:
+    if two_exp(log2) != n:
         _, partial_sums_24 = checked_decompose_bits(n)
-        match_range(log2,
-            range(2, 24),
-            lambda i: _verify_log2_small(n, partial_sums_24, i),
-            range(24, 31),
-            lambda i: _verify_log2_large(n, i))
+        match_range(log2, range(2, 24), lambda i: _verify_log2_small(n, partial_sums_24, i), range(24, 31), lambda i: _verify_log2_large(n, i))
     return log2
-

@@ -2,7 +2,7 @@ use crate::{default_whir_config, prove_execution::prove_execution, verify_execut
 use backend::*;
 use lean_compiler::*;
 use lean_vm::*;
-use rand::{Rng, SeedableRng, rngs::StdRng};
+use rand::{RngExt, SeedableRng, rngs::StdRng};
 use utils::{init_tracing, poseidon16_compress};
 
 #[test]
@@ -15,7 +15,7 @@ DIGEST_LEN = 8
 
 def main():
     pub_start = NONRESERVED_PROGRAM_INPUT_START
-    poseidon16(pub_start + 4 * DIGEST_LEN, pub_start + 5 * DIGEST_LEN, pub_start + 6 * DIGEST_LEN)
+    poseidon16_compress(pub_start + 4 * DIGEST_LEN, pub_start + 5 * DIGEST_LEN, pub_start + 6 * DIGEST_LEN)
 
     base_ptr = pub_start + 88
     ext_a_ptr = pub_start + 88 + N
@@ -188,7 +188,7 @@ fn test_zk_vm_helper(program_str: &str, (public_input, private_input): (&[F], &[
         false,
     );
     let proof_time = time.elapsed();
-    verify_execution(&bytecode, public_input, proof.raw_proof().unwrap()).unwrap();
+    verify_execution(&bytecode, public_input, proof.proof).unwrap();
     println!("{}", proof.metadata.display());
     println!("Proof time: {:.3} s", proof_time.as_secs_f32());
 }

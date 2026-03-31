@@ -18,7 +18,8 @@ pub fn prove_gkr_quotient<EF: ExtensionField<PF<EF>>>(
         vec![(numerators.soft_clone().into(), denominators.soft_clone().into())];
 
     loop {
-        let (mut prev_numerators, mut prev_denominators) = layers.last().cloned().unwrap();
+        let mut prev_numerators: Mle<'_, _> = layers.last().unwrap().0.by_ref().soft_clone().into();
+        let mut prev_denominators: Mle<'_, _> = layers.last().unwrap().1.by_ref().soft_clone().into();
         if prev_numerators.is_packed() && prev_numerators.n_vars() < MIN_VARS_FOR_PACKING {
             (prev_numerators, prev_denominators) = (
                 prev_numerators.unpack().as_owned_or_clone().into(),
@@ -75,14 +76,12 @@ fn prove_gkr_quotient_step<EF: ExtensionField<PF<EF>>>(
     let alpha = prover_state.sample();
 
     assert_eq!(claims.len(), 2);
-    let claims_vec: Vec<EF> = claims.to_vec();
-    let sum = claims_vec[0] + claims_vec[1] * alpha;
+    let sum = claims[0] + claims[1] * alpha;
     let (mut next_point, inner_evals, _) = sumcheck_prove::<EF, _, _>(
         prev_numerators_and_denominators_split,
         &GKRQuotientComputation {},
         &alpha.powers().take(2).collect(),
         Some((claim_point.0.clone(), None)),
-        false,
         prover_state,
         sum,
         false,
@@ -129,11 +128,8 @@ fn verify_gkr_quotient_step<EF: ExtensionField<PF<EF>>>(
 ) -> Result<(MultilinearPoint<EF>, EF, EF), ProofError> {
     let alpha = verifier_state.sample();
 
-    let (retrieved_quotient, postponed) = sumcheck_verify(verifier_state, n_vars, 3)?;
-
-    if retrieved_quotient != claims_num + alpha * claims_den {
-        return Err(ProofError::InvalidProof);
-    }
+    let expected_sum = claims_num + alpha * claims_den;
+    let postponed = sumcheck_verify(verifier_state, n_vars, 3, expected_sum, Some(&point.0))?;
 
     let inner_evals = verifier_state.next_extension_scalars_vec(4)?;
 
@@ -206,7 +202,7 @@ mod tests {
     use std::time::Instant;
 
     use super::*;
-    use rand::{Rng, SeedableRng, rngs::StdRng};
+    use rand::{RngExt, SeedableRng, rngs::StdRng};
     use utils::{build_prover_state, build_verifier_state, init_tracing};
 
     type EF = QuinticExtensionFieldKB;
@@ -214,8 +210,6 @@ mod tests {
     fn sum_all_quotients(nums: &[EF], den: &[EF]) -> EF {
         nums.iter().zip(den.iter()).map(|(&n, &d)| n / d).sum()
     }
-
-    const N_GROUPS: usize = 2;
 
     #[test]
     fn test_gkr_quotient() {
@@ -242,7 +236,7 @@ mod tests {
         );
         println!("Proving time: {:?}", time.elapsed());
 
-        let mut verifier_state = build_verifier_state(prover_state);
+        let mut verifier_state = build_verifier_state(prover_state).unwrap();
 
         let verifier_statements = verify_gkr_quotient::<EF>(&mut verifier_state, log_n).unwrap();
         assert_eq!(&verifier_statements, &prover_statements);

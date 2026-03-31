@@ -1,9 +1,4 @@
-use std::fmt;
-
 use crate::core::{F, SourceLocation};
-use crate::diagnostics::profiler::MemoryProfile;
-use crate::execution::Memory;
-use crate::{TableTrace, error};
 
 #[derive(Debug, Clone)]
 pub enum RunnerError {
@@ -20,6 +15,7 @@ pub enum RunnerError {
     PCOutOfBounds,
     DebugAssertFailed(String, SourceLocation),
     InvalidExtensionOp,
+    ParallelSegmentFailed(usize, Box<RunnerError>),
 }
 
 pub type VMResult<T> = Result<T, RunnerError>;

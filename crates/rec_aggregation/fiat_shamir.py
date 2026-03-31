@@ -13,6 +13,35 @@ def fs_new(transcript_ptr):
     return fs_state
 
 
+@inline
+def fs_observe_chunks(fs, data, n_chunks):
+    result: Mut = Array(9)
+    poseidon16_compress(fs, data, result)
+    for i in unroll(1, n_chunks):
+        new_result = Array(9)
+        poseidon16_compress(result, data + i * DIGEST_LEN, new_result)
+        result = new_result
+    result[8] = fs[8]  # preserve transcript pointer
+    return result
+
+
+def fs_observe(fs, data, length: Const):
+    n_full_chunks = (length - (length % DIGEST_LEN)) / DIGEST_LEN
+    remainder = length % DIGEST_LEN
+    if remainder == 0:
+        return fs_observe_chunks(fs, data, n_full_chunks)
+    intermediate = fs_observe_chunks(fs, data, n_full_chunks)
+    padded = Array(DIGEST_LEN)
+    for j in unroll(0, remainder):
+        padded[j] = data[n_full_chunks * DIGEST_LEN + j]
+    for j in unroll(remainder, DIGEST_LEN):
+        padded[j] = 0
+    final_result = Array(9)
+    poseidon16_compress(intermediate, padded, final_result)
+    final_result[8] = fs[8]  # preserve transcript pointer
+    return final_result
+
+
 def fs_grinding(fs, bits):
     if bits == 0:
         return fs  # no grinding
@@ -20,7 +49,7 @@ def fs_grinding(fs, bits):
     set_to_7_zeros(transcript_ptr + 1)
 
     new_fs = Array(9)
-    poseidon16(fs, transcript_ptr, new_fs)
+    poseidon16_compress(fs, transcript_ptr, new_fs)
     new_fs[8] = transcript_ptr + 8
 
     sampled = new_fs[0]
@@ -39,9 +68,9 @@ def fs_sample_chunks(fs, n_chunks: Const):
         domain_sep = Array(8)
         domain_sep[0] = i
         set_to_7_zeros(domain_sep + 1)
-        poseidon16(
-            fs,
+        poseidon16_compress(
             domain_sep,
+            fs,
             sampled + i * 8,
         )
     sampled[(n_chunks + 1) * 8] = fs[8]  # same transcript pointer
@@ -52,9 +81,9 @@ def fs_sample_chunks(fs, n_chunks: Const):
 @inline
 def fs_sample_ef(fs):
     sampled = Array(8)
-    poseidon16(fs, ZERO_VEC_PTR, sampled)
+    poseidon16_compress(ZERO_VEC_PTR, fs, sampled)
     new_fs = Array(9)
-    poseidon16(fs, SAMPLING_DOMAIN_SEPARATOR_PTR, new_fs)
+    poseidon16_compress(SAMPLING_DOMAIN_SEPARATOR_PTR, fs, new_fs)
     new_fs[8] = fs[8]  # same transcript pointer
     return new_fs, sampled
 
@@ -84,9 +113,9 @@ def fs_receive_chunks(fs, n_chunks: Const):
     transcript_ptr = fs[8]
     new_fs[8 * n_chunks] = transcript_ptr + 8 * n_chunks  # advance transcript pointer
 
-    poseidon16(fs, transcript_ptr, new_fs)
+    poseidon16_compress(fs, transcript_ptr, new_fs)
     for i in unroll(1, n_chunks):
-        poseidon16(
+        poseidon16_compress(
             new_fs + ((i - 1) * 8),
             transcript_ptr + i * 8,
             new_fs + i * 8,
@@ -101,6 +130,7 @@ def fs_receive_ef_inlined(fs, n):
         assert ef_ptr[i] == 0
     return new_fs, ef_ptr
 
+
 def fs_receive_ef_by_log_dynamic(fs, log_n, min_value: Const, max_value: Const):
     debug_assert(log_n < max_value)
     debug_assert(min_value <= log_n)
@@ -109,11 +139,13 @@ def fs_receive_ef_by_log_dynamic(fs, log_n, min_value: Const, max_value: Const):
     new_fs, ef_ptr = match_range(log_n, range(min_value, max_value), lambda ln: fs_receive_ef(fs, 2**ln))
     return new_fs, ef_ptr
 
+
 def fs_receive_ef(fs, n: Const):
     new_fs, ef_ptr = fs_receive_chunks(fs, div_ceil(n * DIM, 8))
     for i in unroll(n * DIM, next_multiple_of(n * DIM, 8)):
         assert ef_ptr[i] == 0
     return new_fs, ef_ptr
+
 
 def fs_print_state(fs_state):
     for i in unroll(0, 9):
@@ -129,7 +161,7 @@ def fs_sample_data_with_offset(fs, n_chunks: Const, offset):
         domain_sep = Array(8)
         domain_sep[0] = offset + i
         set_to_7_zeros(domain_sep + 1)
-        poseidon16(fs, domain_sep, sampled + i * 8)
+        poseidon16_compress(domain_sep, fs, sampled + i * 8)
     return sampled
 
 
@@ -140,7 +172,7 @@ def fs_finalize_sample(fs, total_n_chunks):
     domain_sep = Array(8)
     domain_sep[0] = total_n_chunks
     set_to_7_zeros(domain_sep + 1)
-    poseidon16(fs, domain_sep, new_fs)
+    poseidon16_compress(domain_sep, fs, new_fs)
     new_fs[8] = fs[8]  # same transcript pointer
     return new_fs
 
@@ -151,9 +183,10 @@ def fs_sample_queries(fs, n_samples):
     # Compute total_chunks = ceil(n_samples / 8) via bit decomposition.
     # Big-endian: nb[0]=bit7 (MSB), nb[7]=bit0 (LSB).
     nb = checked_decompose_bits_small_value_const(n_samples, 8)
-    floor_div = nb[0]*16 + nb[1]*8 + nb[2]*4 + nb[3]*2 + nb[4]
+    floor_div = nb[0] * 16 + nb[1] * 8 + nb[2] * 4 + nb[3] * 2 + nb[4]
     has_remainder = 1 - (1 - nb[5]) * (1 - nb[6]) * (1 - nb[7])
     total_chunks = floor_div + has_remainder
     # Sample exactly the needed chunks (dispatch via match_range to keep n_chunks const)
     sampled = match_range(total_chunks, range(0, 33), lambda nc: fs_sample_data_with_offset(fs, nc, 0))
-    return sampled, total_chunks
+    new_fs = fs_finalize_sample(fs, total_chunks)
+    return sampled, new_fs

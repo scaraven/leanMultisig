@@ -1,7 +1,7 @@
 use std::ops::{Deref, DerefMut};
 
 use field::*;
-use rand::{Rng, distr::StandardUniform};
+use rand::{Rng, RngExt, distr::StandardUniform};
 use serde::{Deserialize, Serialize};
 
 /// A point `(x_1, ..., x_n)` in `F^n` for some field `F`.
@@ -147,10 +147,6 @@ impl<F: Field> MultiEvaluation<F> {
 
     pub fn num_variables(&self) -> usize {
         self.point.num_variables()
-    }
-
-    pub fn num_values(&self) -> usize {
-        self.values.len()
     }
 
     pub fn split(self) -> Vec<Evaluation<F>> {

@@ -7,7 +7,6 @@ use lean_prover::{
 use lean_vm::*;
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
-use std::rc::Rc;
 use std::sync::OnceLock;
 use sub_protocols::{min_stacked_n_vars, total_whir_statements};
 use tracing::instrument;
@@ -18,7 +17,7 @@ use crate::{MERKLE_LEVELS_PER_CHUNK_FOR_SLOT, N_MERKLE_CHUNKS_FOR_SLOT};
 
 static BYTECODE: OnceLock<Bytecode> = OnceLock::new();
 
-pub(crate) fn get_aggregation_bytecode() -> &'static Bytecode {
+pub fn get_aggregation_bytecode() -> &'static Bytecode {
     BYTECODE
         .get()
         .unwrap_or_else(|| panic!("call init_aggregation_bytecode() first"))
@@ -31,11 +30,18 @@ pub fn init_aggregation_bytecode() {
 fn compile_main_program(inner_program_log_size: usize, bytecode_zero_eval: F) -> Bytecode {
     let bytecode_point_n_vars = inner_program_log_size + log2_ceil_usize(N_INSTRUCTION_COLUMNS);
     let claim_data_size = (bytecode_point_n_vars + 1) * DIMENSION;
+    let claim_data_size_padded = claim_data_size.next_multiple_of(DIGEST_LEN);
     // pub_input layout: n_sigs(1) + slice_hash(8) + slot_low(1) + slot_high(1)
-    //                   + message + merkle_chunks_for_slot + bytecode_claim
-    let pub_input_size = 1 + DIGEST_LEN + 2 + MESSAGE_LEN_FE + N_MERKLE_CHUNKS_FOR_SLOT + claim_data_size;
+    //                   + message + merkle_chunks_for_slot + bytecode_claim_padded + bytecode_hash(8)
+    let pub_input_size =
+        1 + DIGEST_LEN + 2 + MESSAGE_LEN_FE + N_MERKLE_CHUNKS_FOR_SLOT + claim_data_size_padded + DIGEST_LEN;
     let inner_public_memory_log_size = log2_ceil_usize(NONRESERVED_PROGRAM_INPUT_START + pub_input_size);
-    let replacements = build_replacements(inner_program_log_size, inner_public_memory_log_size, bytecode_zero_eval);
+    let replacements = build_replacements(
+        inner_program_log_size,
+        inner_public_memory_log_size,
+        bytecode_zero_eval,
+        pub_input_size,
+    );
 
     let filepath = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("main.py")
@@ -47,7 +53,7 @@ fn compile_main_program(inner_program_log_size: usize, bytecode_zero_eval: F) ->
 
 #[instrument(skip_all)]
 fn compile_main_program_self_referential() -> Bytecode {
-    let mut log_size_guess = 19;
+    let mut log_size_guess = 18;
     let bytecode_zero_eval = F::ONE;
     loop {
         let bytecode = compile_main_program(log_size_guess, bytecode_zero_eval);
@@ -69,6 +75,7 @@ fn build_replacements(
     inner_program_log_size: usize,
     inner_public_memory_log_size: usize,
     bytecode_zero_eval: F,
+    pub_input_size: usize,
 ) -> BTreeMap<String, String> {
     let mut replacements = BTreeMap::new();
 
@@ -96,7 +103,7 @@ fn build_replacements(
 
             let mut num_queries = vec![];
             let mut query_grinding_bits = vec![];
-            let mut oods = vec![cfg.committment_ood_samples];
+            let mut oods = vec![cfg.commitment_ood_samples];
             let mut folding_grinding = vec![cfg.starting_folding_pow_bits];
             for round in &cfg.round_parameters {
                 num_queries.push(round.num_queries);
@@ -211,7 +218,10 @@ fn build_replacements(
         "MAX_LOG_MEMORY_SIZE_PLACEHOLDER".to_string(),
         MAX_LOG_MEMORY_SIZE.to_string(),
     );
-    replacements.insert("MAX_BUS_WIDTH_PLACEHOLDER".to_string(), max_bus_width().to_string());
+    replacements.insert(
+        "MAX_BUS_WIDTH_PLACEHOLDER".to_string(),
+        max_bus_width_including_domainsep().to_string(),
+    );
     replacements.insert(
         "LOGUP_MEMORY_DOMAINSEP_PLACEHOLDER".to_string(),
         LOGUP_MEMORY_DOMAINSEP.to_string(),
@@ -237,6 +247,7 @@ fn build_replacements(
         "INNER_PUBLIC_MEMORY_LOG_SIZE_PLACEHOLDER".to_string(),
         inner_public_memory_log_size.to_string(),
     );
+    replacements.insert("PUB_INPUT_SIZE_PLACEHOLDER".to_string(), pub_input_size.to_string());
 
     let mut lookup_indexes_str = vec![];
     let mut lookup_values_str = vec![];
@@ -369,7 +380,7 @@ where
 {
     let (constraints, bus_flag, bus_data) = get_symbolic_constraints_and_bus_data_values::<F, _>(&table);
     let mut vars_counter = Counter::new();
-    let mut cache: HashMap<*const (), String> = HashMap::new();
+    let mut cache: HashMap<u32, String> = HashMap::new();
 
     let mut res = format!(
         "def evaluate_air_constraints_table_{}({}, air_alpha_powers, bus_beta, logup_alphas_eq_poly):\n",
@@ -381,14 +392,14 @@ where
     res += &format!("\n    constraints_buf = Array(DIM * {})", n_constraints);
     for (index, constraint) in constraints.iter().enumerate() {
         let dest = format!("constraints_buf + {} * DIM", index);
-        eval_air_constraint(constraint, Some(&dest), &mut cache, &mut res, &mut vars_counter);
+        eval_air_constraint(*constraint, Some(&dest), &mut cache, &mut res, &mut vars_counter);
     }
 
     // first: bus data
-    let flag = eval_air_constraint(&bus_flag, None, &mut cache, &mut res, &mut vars_counter);
+    let flag = eval_air_constraint(bus_flag, None, &mut cache, &mut res, &mut vars_counter);
     res += &format!("\n    buff = Array(DIM * {})", bus_data.len());
     for (i, data) in bus_data.iter().enumerate() {
-        let data_str = eval_air_constraint(data, None, &mut cache, &mut res, &mut vars_counter);
+        let data_str = eval_air_constraint(*data, None, &mut cache, &mut res, &mut vars_counter);
         res += &format!("\n    copy_5({}, buff + DIM * {})", data_str, i);
     }
     // dot product: bus_res = sum(buff[i] * logup_alphas_eq_poly[i]) for i in 0..bus_data.len()
@@ -399,7 +410,7 @@ where
     );
     res += &format!(
         "\n    bus_res: Mut = add_extension_ret(mul_base_extension_ret(LOGUP_PRECOMPILE_DOMAINSEP, logup_alphas_eq_poly + {} * DIM), bus_res_init)",
-        max_bus_width().next_power_of_two() - 1
+        max_bus_width_including_domainsep().next_power_of_two() - 1
     );
     res += "\n    bus_res = mul_extension_ret(bus_res, bus_beta)";
     res += &format!("\n    sum: Mut = add_extension_ret(bus_res, {})", flag);
@@ -421,9 +432,9 @@ where
 /// If `dest` is Some, writes the result directly there (avoids a copy_5).
 /// If `dest` is None, allocates an aux var. Returns the var/pointer where the result lives.
 fn eval_air_constraint(
-    expr: &SymbolicExpression<F>,
+    expr: SymbolicExpression<F>,
     dest: Option<&str>,
-    cache: &mut HashMap<*const (), String>,
+    cache: &mut HashMap<u32, String>,
     res: &mut String,
     ctr: &mut Counter,
 ) -> String {
@@ -434,27 +445,22 @@ fn eval_air_constraint(
             v
         }
         SymbolicExpression::Variable(v) => format!("{} + DIM * {}", AIR_INNER_VALUES_VAR, v.index),
-        SymbolicExpression::Operation(operation) => {
-            let key = Rc::as_ptr(operation) as *const ();
-            if let Some(v) = cache.get(&key) {
+        SymbolicExpression::Operation(idx) => {
+            if let Some(v) = cache.get(&idx) {
                 if let Some(d) = dest {
                     res.push_str(&format!("\n    copy_5({}, {})", v, d));
                 }
                 return v.clone();
             }
-            let (op, args) = &**operation;
-            let v = match *op {
+            let node = get_node::<F>(idx);
+            let v = match node.op {
                 SymbolicOperation::Neg => {
-                    assert_eq!(args.len(), 1);
-                    let a = eval_air_constraint(&args[0], None, cache, res, ctr);
+                    let a = eval_air_constraint(node.lhs, None, cache, res, ctr);
                     let v = format!("aux_{}", ctr.get_next());
                     res.push_str(&format!("\n    {} = opposite_extension_ret({})", v, a));
                     v
                 }
-                _ => {
-                    assert_eq!(args.len(), 2);
-                    eval_air_binop(*op, args, dest, cache, res, ctr)
-                }
+                _ => eval_air_binop(node.op, node.lhs, node.rhs, dest, cache, res, ctr),
             };
             // If dest was requested but the result landed elsewhere, copy it
             if let Some(d) = dest
@@ -462,7 +468,7 @@ fn eval_air_constraint(
             {
                 res.push_str(&format!("\n    copy_5({}, {})", v, d));
             }
-            cache.insert(key, v.clone());
+            cache.insert(idx, v.clone());
             v
         }
     }
@@ -472,17 +478,18 @@ fn eval_air_constraint(
 /// supports it, writes directly to dest and returns dest; otherwise allocates an aux var.
 fn eval_air_binop(
     op: SymbolicOperation,
-    args: &[SymbolicExpression<F>],
+    lhs: SymbolicExpression<F>,
+    rhs: SymbolicExpression<F>,
     dest: Option<&str>,
-    cache: &mut HashMap<*const (), String>,
+    cache: &mut HashMap<u32, String>,
     res: &mut String,
     ctr: &mut Counter,
 ) -> String {
-    let c0 = match &args[0] {
+    let c0 = match lhs {
         SymbolicExpression::Constant(c) => Some(c.as_canonical_u32()),
         _ => None,
     };
-    let c1 = match &args[1] {
+    let c1 = match rhs {
         SymbolicExpression::Constant(c) => Some(c.as_canonical_u32()),
         _ => None,
     };
@@ -490,8 +497,8 @@ fn eval_air_binop(
     match (c0, c1) {
         // Both extension
         (None, None) => {
-            let a = eval_air_constraint(&args[0], None, cache, res, ctr);
-            let b = eval_air_constraint(&args[1], None, cache, res, ctr);
+            let a = eval_air_constraint(lhs, None, cache, res, ctr);
+            let b = eval_air_constraint(rhs, None, cache, res, ctr);
             if let Some(d) = dest {
                 let f = match op {
                     SymbolicOperation::Mul => "mul_extension",
@@ -515,12 +522,12 @@ fn eval_air_binop(
         }
         // Mul/Add with a constant (commutative for base-ext)
         _ if matches!(op, SymbolicOperation::Mul | SymbolicOperation::Add) => {
-            let (c, ext_idx) = match (c0, c1) {
-                (Some(c), _) => (c, 1),
-                (_, Some(c)) => (c, 0),
+            let (c, ext_expr) = match (c0, c1) {
+                (Some(c), _) => (c, rhs),
+                (_, Some(c)) => (c, lhs),
                 _ => unreachable!(),
             };
-            let ext = eval_air_constraint(&args[ext_idx], None, cache, res, ctr);
+            let ext = eval_air_constraint(ext_expr, None, cache, res, ctr);
             if let Some(d) = dest {
                 let f = if matches!(op, SymbolicOperation::Mul) {
                     "dot_product_be"
@@ -542,14 +549,14 @@ fn eval_air_binop(
         }
         // Sub: base - ext
         (Some(c), _) => {
-            let ext = eval_air_constraint(&args[1], None, cache, res, ctr);
+            let ext = eval_air_constraint(rhs, None, cache, res, ctr);
             let v = format!("aux_{}", ctr.get_next());
             res.push_str(&format!("\n    {} = sub_base_extension_ret({}, {})", v, c, ext));
             v
         }
         // Sub: ext - base
         (_, Some(c)) => {
-            let ext = eval_air_constraint(&args[0], None, cache, res, ctr);
+            let ext = eval_air_constraint(lhs, None, cache, res, ctr);
             if let Some(d) = dest {
                 // add_be(tmp, dest, ext) asserts ext = tmp + dest, i.e. dest = ext - tmp
                 emit_base_precompile(res, ctr, "add_be", c, d, &ext);

@@ -10,15 +10,9 @@ use utils::ansi::Colorize;
 use utils::build_prover_state;
 #[derive(Debug)]
 pub struct ExecutionProof {
-    pub proof: PrunedProof<F>,
+    pub proof: Proof<F>,
     // benchmark / debug purpose
     pub metadata: ExecutionMetadata,
-}
-
-impl ExecutionProof {
-    pub fn raw_proof(&self) -> Option<RawProof<F>> {
-        Some(self.proof.clone().restore()?.into_raw_proof())
-    }
 }
 
 pub fn prove_execution(
@@ -31,8 +25,7 @@ pub fn prove_execution(
     let ExecutionTrace {
         traces,
         public_memory_size,
-        non_zero_memory_size: _, // TODO use the information of the ending zeros for speedup
-        mut memory,              // padded with zeros to next power of two
+        mut memory, // padded with zeros to next power of two
         metadata,
     } = info_span!("Witness generation").in_scope(|| {
         let execution_result = info_span!("Executing bytecode")
@@ -47,9 +40,15 @@ pub fn prove_execution(
         memory.resize(min_memory_size, F::ZERO);
     }
     let mut prover_state = build_prover_state();
+    prover_state.observe_scalars(public_input);
+    prover_state.observe_scalars(&poseidon16_compress_pair(&bytecode.hash, &SNARK_DOMAIN_SEP));
     prover_state.add_base_scalars(
         &[
-            vec![whir_config.starting_log_inv_rate, log2_strict_usize(memory.len())],
+            vec![
+                whir_config.starting_log_inv_rate,
+                log2_strict_usize(memory.len()),
+                public_input.len(),
+            ],
             traces.values().map(|t| t.log_n_rows).collect::<Vec<_>>(),
         ]
         .concat()
@@ -75,7 +74,7 @@ pub fn prove_execution(
     info_span!("Building memory access count").in_scope(|| {
         for (table, trace) in &traces {
             for lookup in table.lookups() {
-                for i in &trace.base[lookup.index] {
+                for i in &trace.columns[lookup.index] {
                     for j in 0..lookup.values.len() {
                         memory_acc[i.to_usize() + j] += F::ONE;
                     }
@@ -87,7 +86,7 @@ pub fn prove_execution(
     // // TODO parrallelize
     let mut bytecode_acc = F::zero_vec(bytecode.padded_size());
     info_span!("Building bytecode access count").in_scope(|| {
-        for pc in traces[&Table::execution()].base[COL_PC].iter() {
+        for pc in traces[&Table::execution()].columns[COL_PC].iter() {
             bytecode_acc[pc.to_usize()] += F::ONE;
         }
     });
@@ -104,7 +103,7 @@ pub fn prove_execution(
 
     // logup (GKR)
     let logup_c = prover_state.sample();
-    let logup_alphas = prover_state.sample_vec(log2_ceil_usize(max_bus_width()));
+    let logup_alphas = prover_state.sample_vec(log2_ceil_usize(max_bus_width_including_domainsep()));
     let logup_alphas_eq_poly = eval_eq(&logup_alphas);
 
     let logup_statements = prove_generic_logup(
@@ -196,7 +195,7 @@ pub fn prove_execution(
     );
 
     ExecutionProof {
-        proof: prover_state.into_pruned_proof(),
+        proof: prover_state.into_proof(),
         metadata,
     }
 }
@@ -239,7 +238,7 @@ fn prove_bus_and_air(
                     prover_state,
                     $t,
                     extra_data,
-                    &trace.base[..$t.n_columns()],
+                    &trace.columns[..$t.n_columns()],
                     Some(bus_virtual_statement),
                     $t.n_columns() + $t.n_down_columns() > 5, // heuristic
                 )

@@ -57,7 +57,7 @@ use crate::{Packable, PackedFieldExtension, PackedValue};
 pub trait PrimeCharacteristicRing:
     Sized
     + Default
-    + Clone
+    + Copy
     + Add<Output = Self>
     + AddAssign
     + Sub<Output = Self>
@@ -71,7 +71,7 @@ pub trait PrimeCharacteristicRing:
     + PartialEq
 {
     /// The field `ℤ/p` where the characteristic of this ring is p.
-    type PrimeSubfield: PrimeField;
+    type PrimeSubfield: PrimeField32;
 
     /// The additive identity of the ring.
     ///
@@ -110,8 +110,6 @@ pub trait PrimeCharacteristicRing:
     /// If the field has characteristic 2 this is equal to ONE.
     const NEG_ONE: Self;
 
-    const INVERSE_OF_TWO: Self;
-
     /// Embed an element of the prime field `ℤ/p` into the ring `R`.
     ///
     /// Given any element `[r] ∈ ℤ/p`, represented by an integer `r` between `0` and `p - 1`
@@ -138,7 +136,7 @@ pub trait PrimeCharacteristicRing:
     #[must_use]
     #[inline(always)]
     fn double(&self) -> Self {
-        self.clone() + self.clone()
+        *self + *self
     }
 
     /// The elementary function `halve(a) = a/2`.
@@ -152,7 +150,7 @@ pub trait PrimeCharacteristicRing:
         // is circular when PrimeSubfield = Self. It should also be overwritten by
         // most rings to avoid the multiplication.
         let half = Self::from_prime_subfield(Self::PrimeSubfield::ONE.halve());
-        self.clone() * half
+        *self * half
     }
 
     /// The elementary function `square(a) = a^2`.
@@ -161,7 +159,7 @@ pub trait PrimeCharacteristicRing:
     #[must_use]
     #[inline(always)]
     fn square(&self) -> Self {
-        self.clone() * self.clone()
+        *self * *self
     }
 
     /// The elementary function `cube(a) = a^3`.
@@ -170,7 +168,7 @@ pub trait PrimeCharacteristicRing:
     #[must_use]
     #[inline(always)]
     fn cube(&self) -> Self {
-        self.square() * self.clone()
+        self.square() * *self
     }
 
     /// Computes the arithmetic generalization of boolean `xor`.
@@ -179,7 +177,7 @@ pub trait PrimeCharacteristicRing:
     #[must_use]
     #[inline(always)]
     fn xor(&self, y: &Self) -> Self {
-        self.clone() + y.clone() - self.clone() * y.clone().double()
+        *self + *y - *self * y.double()
     }
 
     /// Computes the arithmetic generalization of a triple `xor`.
@@ -197,7 +195,7 @@ pub trait PrimeCharacteristicRing:
     #[must_use]
     #[inline(always)]
     fn andn(&self, y: &Self) -> Self {
-        (Self::ONE - self.clone()) * y.clone()
+        (Self::ONE - *self) * *y
     }
 
     /// The vanishing polynomial for boolean values: `x * (1 - x)`.
@@ -219,12 +217,12 @@ pub trait PrimeCharacteristicRing:
     #[must_use]
     #[inline]
     fn exp_u64(&self, power: u64) -> Self {
-        let mut current = self.clone();
+        let mut current = *self;
         let mut product = Self::ONE;
 
         for j in 0..bits_u64(power) {
             if (power >> j) & 1 != 0 {
-                product *= current.clone();
+                product *= current;
             }
             current = current.square();
         }
@@ -242,15 +240,15 @@ pub trait PrimeCharacteristicRing:
     fn exp_const_u64<const POWER: u64>(&self) -> Self {
         match POWER {
             0 => Self::ONE,
-            1 => self.clone(),
+            1 => *self,
             2 => self.square(),
             3 => self.cube(),
             4 => self.square().square(),
-            5 => self.square().square() * self.clone(),
+            5 => self.square().square() * *self,
             6 => self.square().cube(),
             7 => {
                 let x2 = self.square();
-                let x3 = x2.clone() * self.clone();
+                let x3 = x2 * *self;
                 let x4 = x2.square();
                 x3 * x4
             }
@@ -264,7 +262,7 @@ pub trait PrimeCharacteristicRing:
     #[must_use]
     #[inline]
     fn exp_power_of_2(&self, power_log: usize) -> Self {
-        let mut res = self.clone();
+        let mut res = *self;
         for _ in 0..power_log {
             res = res.square();
         }
@@ -279,7 +277,7 @@ pub trait PrimeCharacteristicRing:
     fn mul_2exp_u64(&self, exp: u64) -> Self {
         // Some rings might want to reimplement this to avoid the
         // exponentiations (and potentially even the multiplication).
-        self.clone() * Self::TWO.exp_u64(exp)
+        *self * Self::TWO.exp_u64(exp)
     }
 
     /// Divide by a given power of two. `div_2exp_u64(a, exp) = a/2^exp`
@@ -291,7 +289,7 @@ pub trait PrimeCharacteristicRing:
     fn div_2exp_u64(&self, exp: u64) -> Self {
         // Some rings might want to reimplement this to avoid the
         // exponentiations (and potentially even the multiplication).
-        self.clone() * Self::from_prime_subfield(Self::PrimeSubfield::ONE.halve().exp_u64(exp))
+        *self * Self::from_prime_subfield(Self::PrimeSubfield::ONE.halve().exp_u64(exp))
     }
 
     /// Construct an iterator which returns powers of `self`: `self^0, self^1, self^2, ...`.
@@ -306,7 +304,7 @@ pub trait PrimeCharacteristicRing:
     #[inline]
     fn shifted_powers(&self, start: Self) -> Powers<Self> {
         Powers {
-            base: self.clone(),
+            base: *self,
             current: start,
         }
     }
@@ -315,7 +313,7 @@ pub trait PrimeCharacteristicRing:
     #[must_use]
     #[inline]
     fn dot_product<const N: usize>(u: &[Self; N], v: &[Self; N]) -> Self {
-        u.iter().zip(v).map(|(x, y)| x.clone() * y.clone()).sum()
+        u.iter().zip(v).map(|(x, y)| *x * *y).sum()
     }
 
     /// Compute the sum of a slice of elements whose length is a compile time constant.
@@ -344,10 +342,10 @@ pub trait PrimeCharacteristicRing:
         // I only tested this on `AVX2` though so there might be a better value for other architectures.
         match N {
             0 => Self::ZERO,
-            1 => input[0].clone(),
-            2 => input[0].clone() + input[1].clone(),
-            3 => input[0].clone() + input[1].clone() + input[2].clone(),
-            4 => (input[0].clone() + input[1].clone()) + (input[2].clone() + input[3].clone()),
+            1 => input[0],
+            2 => input[0] + input[1],
+            3 => input[0] + input[1] + input[2],
+            4 => (input[0] + input[1]) + (input[2] + input[3]),
             5 => Self::sum_array::<4>(&input[..4]) + Self::sum_array::<1>(&input[4..]),
             6 => Self::sum_array::<4>(&input[..4]) + Self::sum_array::<2>(&input[4..]),
             7 => Self::sum_array::<4>(&input[..4]) + Self::sum_array::<3>(&input[4..]),
@@ -447,7 +445,7 @@ pub trait BasedVectorSpace<F: PrimeCharacteristicRing>: Sized {
     #[must_use]
     #[inline]
     fn from_basis_coefficients_slice(slice: &[F]) -> Option<Self> {
-        Self::from_basis_coefficients_iter(slice.iter().cloned())
+        Self::from_basis_coefficients_iter(slice.iter().copied())
     }
 
     /// Fixes a basis for the algebra `A` and uses this to
@@ -894,11 +892,20 @@ pub trait PrimeField32: PrimeField64 {
     /// This will be the fastest way to convert a field element to a `u32` and
     /// is intended for use in hashing. It will also be consistent across different targets.
     #[must_use]
-    #[inline(always)]
-    fn to_unique_u32(&self) -> u32 {
-        // A simple default which is optimal for some fields.
-        self.as_canonical_u32()
-    }
+    fn to_unique_u32(&self) -> u32;
+
+    /// Reduce a u128 that is the sum of products `Σ to_unique_u32(a_i) * to_unique_u32(b_i)`
+    /// back to a field element equal to `Σ (a_i * b_i)`.
+    ///
+    /// This enables delaying modular reduction across many multiply-accumulate steps:
+    /// compute raw u32×u32→u64 products, sum into u128, then reduce once at the end.
+    #[must_use]
+    fn reduce_product_sum(sum: u128) -> Self;
+
+    /// Signed variant: reduce a sum of signed products of raw values.
+    /// Input is `Σ (a_i as i64 - b_i as i64) * (c_i as i64 - d_i as i64)` accumulated into i128.
+    #[must_use]
+    fn reduce_signed_product_sum(sum: i128) -> Self;
 }
 
 /// A field `EF` which is also an algebra over a field `F`.
@@ -958,8 +965,8 @@ impl<R: PrimeCharacteristicRing> Iterator for Powers<R> {
     type Item = R;
 
     fn next(&mut self) -> Option<R> {
-        let result = self.current.clone();
-        self.current *= self.base.clone();
+        let result = self.current;
+        self.current *= self.base;
         Some(result)
     }
 }

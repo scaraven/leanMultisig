@@ -25,14 +25,6 @@ impl Program {
             .map(|(name, _)| name.clone())
             .collect()
     }
-
-    pub fn non_constant_functions_mut(&mut self) -> BTreeSet<&mut Function> {
-        self.functions
-            .iter_mut()
-            .filter(|(_, func)| !func.has_const_arguments())
-            .map(|(_, func)| func)
-            .collect()
-    }
 }
 
 /// A function argument with its modifiers
@@ -41,24 +33,6 @@ pub struct FunctionArg {
     pub name: Var,
     pub is_const: bool,
     pub is_mutable: bool,
-}
-
-impl FunctionArg {
-    pub fn new(name: Var, is_const: bool, is_mutable: bool) -> Self {
-        Self {
-            name,
-            is_const,
-            is_mutable,
-        }
-    }
-
-    pub fn simple(name: Var) -> Self {
-        Self {
-            name,
-            is_const: false,
-            is_mutable: false,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -581,6 +555,7 @@ impl VecLiteral {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum LoopKind {
     Range,
+    ParallelRange,
     Unroll,
     /// `for i in dynamic_unroll(0, a, n_bits): body` — unrolls over runtime-bounded range
     /// using bit decomposition. `n_bits` must be compile-time known.
@@ -592,6 +567,10 @@ pub enum LoopKind {
 impl LoopKind {
     pub fn is_unroll(&self) -> bool {
         matches!(self, Self::Unroll | Self::DynamicUnroll { .. })
+    }
+
+    pub fn is_parallel(&self) -> bool {
+        matches!(self, Self::ParallelRange)
     }
 }
 
@@ -824,7 +803,13 @@ impl Line {
                         iterator, start, end, n_bits, body_str, spaces
                     ),
                     _ => {
-                        let range_fn = if loop_kind.is_unroll() { "unroll" } else { "range" };
+                        let range_fn = if loop_kind.is_unroll() {
+                            "unroll"
+                        } else if loop_kind.is_parallel() {
+                            "parallel_range"
+                        } else {
+                            "range"
+                        };
                         format!(
                             "for {} in {}({}, {}) {{\n{}\n{}}}",
                             iterator, range_fn, start, end, body_str, spaces

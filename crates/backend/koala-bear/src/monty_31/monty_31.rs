@@ -160,6 +160,9 @@ impl<'de, FP: FieldParameters> Deserialize<'de> for MontyField31<FP> {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         // It's faster to Serialize and Deserialize in monty form.
         let val = u32::deserialize(d)?;
+        if val >= FP::PRIME {
+            return Err(serde::de::Error::custom("non-canonical MontyField31 value"));
+        }
         Ok(Self::new_monty(val))
     }
 }
@@ -173,7 +176,6 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for MontyField31<FP> {
     const ONE: Self = FP::MONTY_ONE;
     const TWO: Self = FP::MONTY_TWO;
     const NEG_ONE: Self = FP::MONTY_NEG_ONE;
-    const INVERSE_OF_TWO: Self = FP::MONTY_INVERSE_OF_TWO;
 
     #[inline(always)]
     fn from_prime_subfield(f: Self) -> Self {
@@ -620,6 +622,20 @@ impl<FP: FieldParameters> PrimeField32 for MontyField31<FP> {
         // The internal representation is already a unique u32 for each field element.
         // It's fine to hash things in monty form.
         self.value
+    }
+
+    #[inline]
+    fn reduce_product_sum(sum: u128) -> Self {
+        let r = (sum % FP::PRIME as u128) as u64;
+        Self::new_monty(monty_reduce::<FP>(r))
+    }
+
+    #[inline]
+    fn reduce_signed_product_sum(sum: i128) -> Self {
+        let p = FP::PRIME as i128;
+        let r = sum % p;
+        let r = if r < 0 { (r + p) as u64 } else { r as u64 };
+        Self::new_monty(monty_reduce::<FP>(r))
     }
 }
 

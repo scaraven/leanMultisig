@@ -1,23 +1,21 @@
 #![cfg_attr(not(test), allow(unused_crate_dependencies))]
 use backend::*;
+use lean_prover::SNARK_DOMAIN_SEP;
 use lean_prover::prove_execution::prove_execution;
 use lean_prover::verify_execution::ProofVerificationDetails;
 use lean_prover::verify_execution::verify_execution;
 use lean_vm::*;
 use tracing::instrument;
-use utils::{build_prover_state, poseidon_compress_slice, poseidon16_compress_pair};
-use xmss::{
-    LOG_LIFETIME, MESSAGE_LEN_FE, Poseidon16History, SIG_SIZE_FE, XmssPublicKey, XmssSignature, slot_to_field_elements,
-    xmss_verify_with_poseidon_trace,
-};
+use utils::{build_prover_state, get_poseidon16, poseidon_compress_slice, poseidon16_compress_pair};
+use xmss::{LOG_LIFETIME, MESSAGE_LEN_FE, SIG_SIZE_FE, XmssPublicKey, XmssSignature, slot_to_field_elements};
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
-use crate::compilation::get_aggregation_bytecode;
+pub use crate::compilation::{get_aggregation_bytecode, init_aggregation_bytecode};
 
 pub mod benchmark;
-pub mod compilation;
+mod compilation;
 
 const MERKLE_LEVELS_PER_CHUNK_FOR_SLOT: usize = 4;
 const N_MERKLE_CHUNKS_FOR_SLOT: usize = LOG_LIFETIME / MERKLE_LEVELS_PER_CHUNK_FOR_SLOT;
@@ -36,13 +34,8 @@ pub(crate) fn count_signers(topology: &AggregationTopology, overlap: usize) -> u
 }
 
 pub fn hash_pubkeys(pub_keys: &[XmssPublicKey]) -> [F; DIGEST_LEN] {
-    let iv = [F::ZERO; DIGEST_LEN];
-    let flat: Vec<F> = iv
-        .iter()
-        .copied()
-        .chain(pub_keys.iter().flat_map(|pk| pk.merkle_root.iter().copied()))
-        .collect();
-    poseidon_compress_slice(&flat)
+    let flat: Vec<F> = pub_keys.iter().flat_map(|pk| pk.merkle_root.iter().copied()).collect();
+    poseidon_compress_slice(&flat, true)
 }
 
 fn compute_merkle_chunks_for_slot(slot: u32) -> Vec<F> {
@@ -67,6 +60,7 @@ fn build_non_reserved_public_input(
     message: &[F; MESSAGE_LEN_FE],
     slot: u32,
     bytecode_claim_output: &[F],
+    bytecode_hash: &[F; DIGEST_LEN],
 ) -> Vec<F> {
     let mut pi = vec![];
     pi.push(F::from_usize(n_sigs));
@@ -77,6 +71,11 @@ fn build_non_reserved_public_input(
     pi.push(slot_hi);
     pi.extend(compute_merkle_chunks_for_slot(slot));
     pi.extend_from_slice(bytecode_claim_output);
+    pi.extend(std::iter::repeat_n(
+        F::ZERO,
+        bytecode_claim_output.len().next_multiple_of(DIGEST_LEN) - bytecode_claim_output.len(),
+    ));
+    pi.extend_from_slice(&poseidon16_compress_pair(bytecode_hash, &SNARK_DOMAIN_SEP));
     pi
 }
 
@@ -94,7 +93,7 @@ fn encode_xmss_signature(sig: &XmssSignature) -> Vec<F> {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AggregatedXMSS {
     pub pub_keys: Vec<XmssPublicKey>,
-    pub proof: PrunedProof<F>,
+    pub proof: Proof<F>,
     pub bytecode_point: Option<MultilinearPoint<EF>>,
     // benchmark / debug purpose
     #[serde(skip, default)]
@@ -102,10 +101,6 @@ pub struct AggregatedXMSS {
 }
 
 impl AggregatedXMSS {
-    pub fn raw_proof(&self) -> Option<RawProof<F>> {
-        self.proof.clone().restore().map(|p| p.into_raw_proof())
-    }
-
     pub fn serialize(&self) -> Vec<u8> {
         let encoded = postcard::to_allocvec(self).expect("postcard serialization failed");
         lz4_flex::compress_prepend_size(&encoded)
@@ -138,7 +133,14 @@ impl AggregatedXMSS {
 
         let slice_hash = hash_pubkeys(&self.pub_keys);
 
-        build_non_reserved_public_input(self.pub_keys.len(), &slice_hash, message, slot, &bytecode_claim_output)
+        build_non_reserved_public_input(
+            self.pub_keys.len(),
+            &slice_hash,
+            message,
+            slot,
+            &bytecode_claim_output,
+            &bytecode.hash,
+        )
     }
 }
 
@@ -152,11 +154,7 @@ pub fn xmss_verify_aggregation(
     }
     let public_input = agg_sig.public_input(message, slot);
     let bytecode = get_aggregation_bytecode();
-    verify_execution(
-        bytecode,
-        &public_input,
-        agg_sig.raw_proof().ok_or(ProofError::InvalidProof)?,
-    )
+    verify_execution(bytecode, &public_input, agg_sig.proof.clone()).map(|(details, _)| details)
 }
 
 /// panics if one of the sub-proof (children) is invalid
@@ -195,13 +193,7 @@ pub fn xmss_aggregate(
     let mut child_raw_proofs = vec![];
     for child in children {
         let child_pub_input = child.public_input(message, slot);
-        let raw_proof = child
-            .proof
-            .clone()
-            .restore()
-            .expect("invalid child proof")
-            .into_raw_proof();
-        let verif = verify_execution(bytecode, &child_pub_input, raw_proof.clone()).unwrap();
+        let (verif, raw_proof) = verify_execution(bytecode, &child_pub_input, child.proof.clone()).unwrap();
         child_bytecode_evals.push(verif.bytecode_evaluation);
         child_pub_inputs.push(child_pub_input);
         child_raw_proofs.push(raw_proof);
@@ -249,7 +241,6 @@ pub fn xmss_aggregate(
             &ProductComputation {},
             &vec![],
             None,
-            false,
             &mut reduction_prover,
             claimed_sum,
             false,
@@ -263,11 +254,16 @@ pub fn xmss_aggregate(
         let claim_output = flatten_scalars_to_base::<F, EF>(&ef_claim);
         assert_eq!(claim_output.len(), bytecode_claim_size);
 
-        (
-            claim_output,
-            Some(reduced_point),
-            reduction_prover.raw_proof().transcript,
-        )
+        let final_sumcheck_proof = {
+            // Recover the transcript of the final sumcheck (for bytecode claim reduction)
+            let mut vs = VerifierState::<EF, _>::new(reduction_prover.into_proof(), get_poseidon16().clone()).unwrap();
+            vs.next_base_scalars_vec(claims_hash.len()).unwrap();
+            let _: EF = vs.sample();
+            sumcheck_verify(&mut vs, bytecode_point_n_vars, 2, claimed_sum, None).unwrap();
+            vs.into_raw_proof().transcript
+        };
+
+        (claim_output, Some(reduced_point), final_sumcheck_proof)
     } else {
         let mut claim_output = vec![F::ZERO; bytecode_claim_size];
         claim_output[bytecode_point_n_vars * DIMENSION] = bytecode.instructions_multilinear[0];
@@ -276,8 +272,14 @@ pub fn xmss_aggregate(
 
     // Build public input
     let slice_hash = hash_pubkeys(&global_pub_keys);
-    let non_reserved_public_input =
-        build_non_reserved_public_input(n_sigs, &slice_hash, message, slot, &bytecode_claim_output);
+    let non_reserved_public_input = build_non_reserved_public_input(
+        n_sigs,
+        &slice_hash,
+        message,
+        slot,
+        &bytecode_claim_output,
+        &bytecode.hash,
+    );
     let public_memory = build_public_memory(&non_reserved_public_input);
 
     // Build private input
@@ -363,9 +365,6 @@ pub fn xmss_aggregate(
     }
     private_input.extend_from_slice(&final_sumcheck_transcript);
 
-    // TODO precompute all the other poseidons
-    let xmss_poseidons_16_precomputed = precompute_poseidons(&raw_xmss, message);
-
     // Build Merkle paths from all child proofs (one Vec<F> per hint_merkle call in whir.py)
     // Each opening produces two entries: leaf_data, then the flattened path.
     let merkle_paths: Vec<Vec<F>> = child_raw_proofs
@@ -380,7 +379,6 @@ pub fn xmss_aggregate(
 
     let witness = ExecutionWitness {
         private_input: &private_input,
-        poseidons_16_precomputed: &xmss_poseidons_16_precomputed,
         xmss_signatures: &xmss_signatures,
         merkle_paths: &merkle_paths,
     };
@@ -410,20 +408,8 @@ pub fn hash_bytecode_claims(claims: &[Evaluation<EF>]) -> [F; DIGEST_LEN] {
         let mut data = flatten_scalars_to_base::<F, EF>(&ef_data);
         data.resize(data.len().next_multiple_of(DIGEST_LEN), F::ZERO);
 
-        let claim_hash = poseidon_compress_slice(&data);
-        running_hash = poseidon16_compress_pair(running_hash, claim_hash);
+        let claim_hash = poseidon_compress_slice(&data, false);
+        running_hash = poseidon16_compress_pair(&running_hash, &claim_hash);
     }
     running_hash
-}
-
-#[instrument(skip_all)]
-fn precompute_poseidons(
-    raw_signers: &[(XmssPublicKey, XmssSignature)],
-    message: &[F; MESSAGE_LEN_FE],
-) -> Poseidon16History {
-    let traces: Vec<_> = raw_signers
-        .par_iter()
-        .map(|(pub_key, sig)| xmss_verify_with_poseidon_trace(pub_key, message, sig).unwrap())
-        .collect();
-    traces.into_par_iter().flatten().collect()
 }
