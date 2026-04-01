@@ -1,36 +1,53 @@
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
-pub mod signers_cache;
-mod wots;
-use backend::KoalaBear;
-use utils::poseidon16_compress;
-pub use wots::*;
-mod xmss;
-pub use xmss::*;
 
+pub mod fors;
+pub mod hypertree;
+pub mod signers_cache;
+pub mod sphincs;
+pub mod wots;
+
+pub use fors::*;
+pub use hypertree::*;
+pub use sphincs::*;
+pub use wots::*;
+
+use backend::KoalaBear;
+
+// --- Field / digest types ---
 pub(crate) const DIGEST_SIZE: usize = 8;
 
-type F = KoalaBear;
-type Digest = [F; DIGEST_SIZE];
+pub(crate) type F = KoalaBear;
+pub(crate) type Digest = [F; DIGEST_SIZE];
 
-// WOTS
-pub const V: usize = 42;
-pub const W: usize = 3;
-pub const CHAIN_LENGTH: usize = 1 << W;
-pub const NUM_CHAIN_HASHES: usize = 110;
-pub const TARGET_SUM: usize = V * (CHAIN_LENGTH - 1) - NUM_CHAIN_HASHES;
-pub const V_GRINDING: usize = 2;
-pub const LOG_LIFETIME: usize = 32;
+// --- SPHINCS+ structural parameters ---
+pub const SPX_N: usize = 16;
+pub const SPX_FULL_HEIGHT: usize = 33;
+pub const SPX_D: usize = 3;
+pub const SPX_TREE_HEIGHT: usize = 11; // SPX_FULL_HEIGHT / SPX_D
+pub const SPX_FORS_HEIGHT: usize = 15;
+pub const SPX_FORS_TREES: usize = 9;
+
+// --- WOTS+ parameters ---
+pub const SPX_WOTS_W: usize = 16;
+pub const SPX_WOTS_LOGW: usize = 4; // log2(SPX_WOTS_W)
+pub const SPX_WOTS_LEN: usize = 32; // 8 * N / LOGW = 8 * 16 / 4
+pub const TARGET_SUM: usize = 240; // fixed sum of all 32 encoding indices
+pub const NUM_CHAIN_HASHES: usize = 240; // V*(w-1) - TARGET_SUM = 32*15 - 240
+pub const V_GRINDING: usize = 0;
+
+// --- Lifetime / key material ---
+pub const LOG_LIFETIME: usize = 30; // 2^30 total signatures
+
+// --- Encoding lengths ---
 pub const RANDOMNESS_LEN_FE: usize = 7;
 pub const MESSAGE_LEN_FE: usize = 9;
-pub const TRUNCATED_MERKLE_ROOT_LEN_FE: usize = 6;
 
-pub const SIG_SIZE_FE: usize = RANDOMNESS_LEN_FE + (V + LOG_LIFETIME) * DIGEST_SIZE;
-
-pub type Poseidon16History = Vec<([F; 16], [F; 8])>;
-
-fn poseidon16_compress_with_trace(a: &Digest, b: &Digest, poseidon_16_trace: &mut Vec<([F; 16], [F; 8])>) -> Digest {
-    let input: [F; 16] = [*a, *b].concat().try_into().unwrap();
-    let output = poseidon16_compress(input);
-    poseidon_16_trace.push((input, output));
-    output
-}
+// --- FORS message derivation (bit layout) ---
+// bits  0-10  : leaf_idx      (SPX_TREE_HEIGHT = 11 bits)
+// bits 11-15  : unused
+// bits 16-37  : tree_address  (SPX_FULL_HEIGHT - SPX_TREE_HEIGHT = 22 bits)
+// bits 38-39  : unused
+// bits 40-175 : mhash         (SPX_FORS_MSG_BYTES = 17 bytes = 136 bits)
+pub const SPX_LEAF_BITS: usize = SPX_TREE_HEIGHT; // 11
+pub const SPX_TREE_BITS: usize = SPX_FULL_HEIGHT - SPX_TREE_HEIGHT; // 22
+pub const SPX_FORS_MSG_BYTES: usize = 17; // (SPX_FORS_HEIGHT * SPX_FORS_TREES + 7) / 8

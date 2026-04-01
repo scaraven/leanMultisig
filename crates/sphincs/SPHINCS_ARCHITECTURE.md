@@ -221,11 +221,45 @@ Does **not** depend on `xmss` crate — fully independent.
 
 ---
 
-## Open Questions
+## Resolved Design Questions
 
-- [ ] Exact layout of FORS message derivation: how are the 9 tree indices extracted
-      from the hashed message? (bit decomposition of `SPX_FORS_MSG_BYTES = 17 bytes`)
-- [ ] Whether `poseidon16_compress_pair` or bare `compress` is used for FORS tree
-      node hashing (affects zkDSL circuit design later)
-- [ ] Exact Poseidon input layout for the inter-layer message hash (which fields go
-      in left half vs right half of the 16-element state)
+### FORS message bit layout
+
+The hashed message is decomposed from the LSB as follows:
+
+```
+bits  0-10  : leaf_idx       (SPX_TREE_HEIGHT = 11 bits)
+bits 11-15  : unused         (5 bits padding to byte boundary)
+bits 16-37  : tree_address   (SPX_FULL_HEIGHT - SPX_TREE_HEIGHT = 22 bits)
+bits 38-39  : unused         (2 bits padding to byte boundary)
+bits 40-175 : mhash          (SPX_FORS_MSG_BYTES = 17 bytes = 136 bits)
+bits 176+   : 0              (digest fits in 176 bits)
+```
+
+`mhash` (136 bits) is split into 9 chunks of 15 bits each, one per FORS tree, giving
+the leaf index within that tree. Total needed: 11 + 22 + 135 = 168 bits, fits in 176
+bits (22 bytes). Extraction maps cleanly to KoalaBear field elements with at most 2 FEs
+of range constraints per field — minimal zkVM cost.
+
+### FORS tree node hashing primitive
+
+Use `poseidon16_compress_pair` (with Davies-Meyer feed-forward), the same as XMSS
+Merkle paths. Bare `compress` (from `symetric`) is a lower-level primitive not called
+directly from signature scheme code. Using `poseidon16_compress_pair` everywhere:
+- keeps one hash primitive throughout the codebase
+- requires no new zkDSL circuit precompile for FORS
+- provides collision resistance via feed-forward without extra padding
+
+### Inter-layer message hash input layout
+
+```
+left[0..8]  = child_merkle_root   (full Digest, 8 FEs)
+right[0]    = layer_index         (1 FE, values 0–2)
+right[1]    = randomness_counter  (1 FE, small retry counter)
+right[2..8] = 0                   (zero-padded)
+```
+
+Mirrors the WOTS encoding B call convention: data payload in the left half, positional /
+domain-separation context in the right half. The randomness counter is iterated (same
+retry loop as `find_randomness_for_wots_encoding`) until the output indices sum to
+`TARGET_SUM = 240`.
