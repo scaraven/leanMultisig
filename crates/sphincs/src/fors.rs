@@ -1,0 +1,202 @@
+use serde::{Deserialize, Serialize};
+use utils::poseidon16_compress_pair;
+
+use crate::*;
+
+// FORS (Few-Times Signature Scheme)
+//
+// Signs a message by:
+//   1. Splitting mhash into k=9 indices, each selecting a leaf in one of 9
+//      binary trees of height 15 (32768 leaves each).
+//   2. Revealing the selected leaf's secret value and its 15-node auth path.
+//   3. Verifier recomputes each tree root from (leaf, auth path) and folds
+//      the k roots into a single FORS public key via sequential hash.
+//
+// Secret values are derived from the master seed:
+//   rng_seed = seed ‖ 0x02 ‖ fors_tree_index as u8 ‖ leaf_index.to_le_bytes()
+
+pub struct ForsSecretKey {
+    seed: [u8; 20],
+    /// Materialised leaf secrets: [tree][leaf]
+    leaf_secrets: Vec<Vec<Digest>>,
+    /// Materialised tree nodes: [tree][level][node]
+    /// level 0 = leaf hashes, level SPX_FORS_HEIGHT = root
+    nodes: Vec<Vec<Vec<Digest>>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForsPublicKey(pub Digest);
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ForsSignature {
+    /// For each of the k=9 trees: the revealed leaf secret and auth path.
+    pub trees: [ForsTreeSig; SPX_FORS_TREES],
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ForsTreeSig {
+    pub leaf_secret: Digest,
+    /// Sibling digests from leaf level up to (but not including) the root.
+    /// Length = SPX_FORS_HEIGHT = 15.
+    pub auth_path: Vec<Digest>,
+}
+
+/// Derive the secret value for a single FORS leaf via a Poseidon hash.
+///
+/// Input digest layout (8 field elements = one Digest):
+///   [0..5] : seed packed as 5 little-endian u32s (20 bytes)
+///   [5]    : domain separator 0x02
+///   [6]    : tree_index as u32
+///   [7]    : leaf_index as u32
+///
+/// The input is hashed against an all-zero digest so the full 16-element
+/// Poseidon state is used, matching the rest of the tree construction.
+fn derive_leaf_secret(seed: &[u8; 20], tree_index: usize, leaf_index: usize) -> Digest {
+    let mut input = Digest::default();
+    for (i, chunk) in seed.chunks_exact(4).enumerate() {
+        input[i] = F::new(u32::from_le_bytes(chunk.try_into().unwrap()));
+    }
+    input[5] = F::new(0x02);
+    input[6] = F::new(tree_index as u32);
+    input[7] = F::new(leaf_index as u32);
+    poseidon16_compress_pair(&input, &Digest::default())
+}
+
+/// Hash a leaf secret to produce the level-0 tree node.
+fn hash_leaf(secret: &Digest) -> Digest {
+    poseidon16_compress_pair(secret, &Default::default())
+}
+
+pub fn fors_key_gen(seed: [u8; 20]) -> (ForsSecretKey, ForsPublicKey) {
+    let num_leaves = 1usize << SPX_FORS_HEIGHT;
+
+    let mut all_secrets = Vec::with_capacity(SPX_FORS_TREES);
+    let mut all_nodes: Vec<Vec<Vec<Digest>>> = Vec::with_capacity(SPX_FORS_TREES);
+
+    for t in 0..SPX_FORS_TREES {
+        let secrets: Vec<Digest> = (0..num_leaves)
+            .map(|l| derive_leaf_secret(&seed, t, l))
+            .collect();
+
+        // Level 0: hash of each secret value.
+        let leaf_hashes: Vec<Digest> = secrets.iter().map(hash_leaf).collect();
+
+        // Build inner levels bottom-up.
+        let mut levels = vec![leaf_hashes];
+        for _ in 0..SPX_FORS_HEIGHT {
+            let prev = levels.last().unwrap();
+            let next: Vec<Digest> = prev
+                .chunks_exact(2)
+                .map(|pair| poseidon16_compress_pair(&pair[0], &pair[1]))
+                .collect();
+            levels.push(next);
+        }
+
+        all_secrets.push(secrets);
+        all_nodes.push(levels);
+    }
+
+    let pk = fors_public_key_from_nodes(&all_nodes);
+    let sk = ForsSecretKey { seed, leaf_secrets: all_secrets, nodes: all_nodes };
+    (sk, pk)
+}
+
+fn fors_public_key_from_nodes(nodes: &[Vec<Vec<Digest>>]) -> ForsPublicKey {
+    let roots: Vec<Digest> = nodes.iter().map(|levels| levels[SPX_FORS_HEIGHT][0]).collect();
+    ForsPublicKey(fold_roots(&roots))
+}
+
+/// Sequential left-fold of k roots into a single digest.
+/// fold([r0, r1, r2, ...]) = hash(hash(r0, r1), r2) ...
+pub fn fold_roots(roots: &[Digest]) -> Digest {
+    assert!(roots.len() >= 2, "fold_roots requires at least 2 roots");
+    let init = poseidon16_compress_pair(&roots[0], &roots[1]);
+    roots[2..].iter().fold(init, |acc, r| poseidon16_compress_pair(&acc, r))
+}
+
+pub fn fors_sign(sk: &ForsSecretKey, indices: &[usize; SPX_FORS_TREES]) -> ForsSignature {
+    let trees = std::array::from_fn(|t| {
+        assert!(indices[t] < (1 << SPX_FORS_HEIGHT), "Leaf index out of bounds");
+        let leaf_idx = indices[t];
+        let leaf_secret = sk.leaf_secrets[t][leaf_idx];
+
+        let auth_path = (0..SPX_FORS_HEIGHT)
+            .map(|level| {
+                let sibling_idx = (leaf_idx >> level) ^ 1;
+                sk.nodes[t][level][sibling_idx]
+            })
+            .collect();
+
+        ForsTreeSig { leaf_secret, auth_path }
+    });
+
+    ForsSignature { trees }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum ForsVerifyError {
+    WrongAuthPathLength,
+    OutofBoundsLeafIndex,
+}
+
+/// Verify a FORS signature and recover the FORS public key.
+pub fn fors_verify(
+    sig: &ForsSignature,
+    indices: &[usize; SPX_FORS_TREES],
+) -> Result<ForsPublicKey, ForsVerifyError> {
+    let mut roots = [Digest::default(); SPX_FORS_TREES];
+    for (t, (tree_sig, &leaf_idx)) in sig.trees.iter().zip(indices.iter()).enumerate() {
+        if tree_sig.auth_path.len() != SPX_FORS_HEIGHT {
+            return Err(ForsVerifyError::WrongAuthPathLength);
+        }
+
+        if leaf_idx >= (1 << SPX_FORS_HEIGHT) {
+            return Err(ForsVerifyError::OutofBoundsLeafIndex);
+        }
+
+        // Recompute the level-0 node from the revealed secret.
+        let mut current = hash_leaf(&tree_sig.leaf_secret);
+
+        // Walk up the tree using the auth path.
+        for (level, sibling) in tree_sig.auth_path.iter().enumerate() {
+            let is_left = ((leaf_idx >> level) & 1) == 0;
+            current = if is_left {
+                poseidon16_compress_pair(&current, sibling)
+            } else {
+                poseidon16_compress_pair(sibling, &current)
+            };
+        }
+
+        roots[t] = current;
+    }
+
+    Ok(ForsPublicKey(fold_roots(&roots)))
+}
+
+impl ForsSecretKey {
+    pub fn public_key(&self) -> ForsPublicKey {
+        fors_public_key_from_nodes(&self.nodes)
+    }
+}
+
+/// Extract the k=9 FORS leaf indices from the mhash bytes.
+/// mhash is 17 bytes = 136 bits; split into 9 consecutive 15-bit chunks.
+pub fn extract_fors_indices(mhash: &[u8; SPX_FORS_MSG_BYTES]) -> [usize; SPX_FORS_TREES] {
+    let mask = (1usize << SPX_FORS_HEIGHT) - 1;
+
+    std::array::from_fn(|t| {
+        let bit_offset = t * SPX_FORS_HEIGHT;
+        let byte_offset = bit_offset / 8;
+        let bit_in_byte = bit_offset % 8;
+
+        // 15 bits can span at most 3 bytes.
+        let mut window: u32 = 0;
+        for i in 0..3 {
+            if let Some(&b) = mhash.get(byte_offset + i) {
+                window |= (b as u32) << (8 * i);
+            }
+        }
+
+        ((window >> bit_in_byte) as usize) & mask
+    })
+}

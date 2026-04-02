@@ -79,7 +79,7 @@ All keys and pseudo-random nodes are derived deterministically from a master see
 | Marker | Context |
 |---|---|
 | `0x00` | WOTS+ pre-images (layer index + leaf index) |
-| `0x01` | FORS secret values (FORS tree index + leaf index) |
+| `0x02` | FORS secret values (FORS tree index + leaf index) |
 
 Each derivation also includes all positional fields (layer index, tree index, leaf index)
 to ensure uniqueness across the full hypertree.
@@ -93,7 +93,7 @@ materialised during key generation. There are no pseudo-random out-of-range node
 | Hash call | Positional context included |
 |---|---|
 | WOTS encoding (A) | message + randomness |
-| WOTS encoding (B) | A + leaf index + truncated Merkle root of current layer's tree |
+| WOTS encoding (B) | A + layer index + truncated Merkle root of current layer's tree |
 | Inter-layer message | child Merkle root + layer index + randomness counter |
 | FORS leaf | secret value (derivation already position-specific) |
 | FORS tree nodes | bare compression of children (position implicit via tree structure) |

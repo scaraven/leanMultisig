@@ -49,6 +49,8 @@ impl WotsSecretKey {
         &self.public_key
     }
 
+    /// Sign a message with the WOTS+ secret key, using the provided randomness for encoding.
+    /// Precondition: the encoding must be valid (sum of indices == TARGET_SUM).
     pub fn sign_with_randomness(
         &self,
         message: &[F; MESSAGE_LEN_FE],
