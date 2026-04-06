@@ -51,15 +51,14 @@ impl WotsSecretKey {
 
     /// Sign a message with the WOTS+ secret key, using the provided randomness for encoding.
     /// Precondition: the encoding must be valid (sum of indices == TARGET_SUM).
+    /// Note: `message` must be a Digest (8 FEs). Hash external messages before calling.
     pub fn sign_with_randomness(
         &self,
-        message: &[F; MESSAGE_LEN_FE],
+        message: &Digest,
         layer_index: u32,
-        truncated_merkle_root: &[F; 6],
         randomness: [F; RANDOMNESS_LEN_FE],
     ) -> WotsSignature {
-        let encoding =
-            wots_encode(message, layer_index, truncated_merkle_root, &randomness).unwrap();
+        let encoding = wots_encode(message, layer_index, &randomness).unwrap();
         WotsSignature {
             chain_tips: std::array::from_fn(|i| iterate_hash(self.pre_images[i], encoding[i] as usize)),
             randomness,
@@ -70,11 +69,10 @@ impl WotsSecretKey {
 impl WotsSignature {
     pub fn recover_public_key(
         &self,
-        message: &[F; MESSAGE_LEN_FE],
+        message: &Digest,
         layer_index: u32,
-        truncated_merkle_root: &[F; 6],
     ) -> Option<WotsPublicKey> {
-        let encoding = wots_encode(message, layer_index, truncated_merkle_root, &self.randomness)?;
+        let encoding = wots_encode(message, layer_index, &self.randomness)?;
         Some(WotsPublicKey(std::array::from_fn(|i| {
             iterate_hash(self.chain_tips[i], CHAIN_LENGTH - 1 - encoding[i] as usize)
         })))
@@ -96,45 +94,42 @@ pub fn iterate_hash(a: Digest, n: usize) -> Digest {
 }
 
 pub fn find_randomness_for_wots_encoding(
-    message: &[F; MESSAGE_LEN_FE],
+    message: &Digest,
     layer_index: u32,
-    truncated_merkle_root: &[F; 6],
     rng: &mut impl CryptoRng,
 ) -> ([F; RANDOMNESS_LEN_FE], [u8; V], usize) {
     let mut num_iters = 0;
     loop {
         num_iters += 1;
         let randomness = rng.random();
-        if let Some(encoding) = wots_encode(message, layer_index, truncated_merkle_root, &randomness)
-        {
+        if let Some(encoding) = wots_encode(message, layer_index, &randomness) {
             return (randomness, encoding, num_iters);
         }
     }
 }
 
-/// Encode (message, layer_index, truncated_merkle_root, randomness) into V chain indices.
+/// Encode (message, layer_index, randomness) into V chain indices.
 ///
-/// A = poseidon(message[0..8] | [message[8], randomness[0..7]])
-/// B = poseidon(A | [layer_index, 0, truncated_merkle_root[0..6]])
+/// Note: `message` must be a Digest (8 FEs). Hash external messages before calling.
+///
+/// A = poseidon(message[0..8] | [randomness[0..7], 0])
+/// B = poseidon(A | [layer_index, 0, 0, 0, 0, 0, 0, 0])
 ///
 /// Extract 4-bit chunks from B (24 bits per element, little-endian), take first 32.
 /// Valid iff sum of indices == TARGET_SUM.
 pub fn wots_encode(
-    message: &[F; MESSAGE_LEN_FE],
+    message: &Digest,
     layer_index: u32,
-    truncated_merkle_root: &[F; 6],
     randomness: &[F; RANDOMNESS_LEN_FE],
 ) -> Option<[u8; V]> {
-    // A = poseidon(message (9 fe), randomness (7 fe))
+    // A = poseidon(message (8 fe), randomness (7 fe) + 1 zero pad)
     let mut a_input_right = [F::default(); 8];
-    a_input_right[0] = message[8];
-    a_input_right[1..1 + RANDOMNESS_LEN_FE].copy_from_slice(randomness);
-    let a = poseidon16_compress_pair(message[..8].try_into().unwrap(), &a_input_right);
+    a_input_right[..RANDOMNESS_LEN_FE].copy_from_slice(randomness);
+    let a = poseidon16_compress_pair(message, &a_input_right);
 
-    // B = poseidon(A (8 fe), [layer_index, 0, truncated_merkle_root (6 fe)])
+    // B = poseidon(A (8 fe), [layer_index, 0, 0, 0, 0, 0, 0, 0])
     let mut b_input_right = [F::default(); 8];
     b_input_right[0] = F::from_usize(layer_index as usize);
-    b_input_right[2..8].copy_from_slice(truncated_merkle_root);
     let compressed = poseidon16_compress_pair(&a, &b_input_right);
 
     if compressed.iter().any(|&kb| kb == -F::ONE) {

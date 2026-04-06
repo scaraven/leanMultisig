@@ -2,13 +2,12 @@
 
 pub mod fors;
 pub mod hypertree;
-pub mod signers_cache;
-pub mod sphincs;
+// pub mod signers_cache;  // TODO: not yet implemented
+// pub mod sphincs;        // TODO: not yet implemented
 pub mod wots;
 
 pub use fors::*;
 pub use hypertree::*;
-pub use sphincs::*;
 pub use wots::*;
 
 use backend::KoalaBear;
