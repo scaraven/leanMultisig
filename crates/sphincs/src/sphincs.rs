@@ -1,13 +1,15 @@
 use utils::poseidon16_compress_pair;
 
-use crate::{Digest, F, ForsPublicKey, ForsSecretKey, HypertreeSecretKey, MESSAGE_LEN_FE, SPX_FORS_MSG_BYTES, fors, hypertree};
 use crate::fors::ForsSignature;
 use crate::hypertree::HypertreeSignature;
+use crate::{
+    Digest, F, ForsPublicKey, ForsSecretKey, HypertreeSecretKey, MESSAGE_LEN_FE, SPX_FORS_MSG_BYTES, fors, hypertree,
+};
 
 struct SphincsSecretKey {
     seed: [u8; 20],
-    // cached material 
-    fors_key: ForsSecretKey
+    // cached material
+    fors_key: ForsSecretKey,
 }
 
 impl SphincsSecretKey {
@@ -41,7 +43,7 @@ impl Into<HypertreeSecretKey> for &SphincsSecretKey {
 
 struct SphincsPublicKey {
     root: Digest,
-    fors_root: ForsPublicKey
+    fors_root: ForsPublicKey,
 }
 
 struct SphincsSig {
@@ -55,9 +57,7 @@ fn extract_digest_hash(digest: &Digest) -> (usize, usize, &[u8; SPX_FORS_MSG_BYT
 }
 
 impl SphincsSecretKey {
-
     pub fn sign(message: [F; MESSAGE_LEN_FE], sk: &SphincsSecretKey) -> SphincsSig {
-    
         // Hash the message to a digest so that we can extract the tree and leaf indices for the FORS signature.
         let mut right: [F; 8] = Default::default();
         right[0] = message[8];
@@ -70,8 +70,12 @@ impl SphincsSecretKey {
 
         let pk = sk.public_key();
 
-        let hypertree_sig: HypertreeSignature = hypertree::hypertree_sign(&sk.into(), &pk.fors_root.0, leaf_idx, tree_address);
+        let hypertree_sig: HypertreeSignature =
+            hypertree::hypertree_sign(&sk.into(), &pk.fors_root.0, leaf_idx, tree_address);
 
-        SphincsSig { fors_sig, hypertree_sig }
+        SphincsSig {
+            fors_sig,
+            hypertree_sig,
+        }
     }
 }

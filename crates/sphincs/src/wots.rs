@@ -171,8 +171,7 @@ mod tests {
         });
         let sk = WotsSecretKey::new(pre_images);
 
-        let (randomness, _encoding, _iters) =
-            find_randomness_for_wots_encoding(&message, layer_index, &mut rng);
+        let (randomness, _encoding, _iters) = find_randomness_for_wots_encoding(&message, layer_index, &mut rng);
 
         let sig = sk.sign_with_randomness(&message, layer_index, randomness);
         let recovered = sig.recover_public_key(&message, layer_index).expect("valid signature");
