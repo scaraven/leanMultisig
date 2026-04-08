@@ -235,7 +235,7 @@ pub fn hypertree_verify(
     message: &Digest,
     leaf_index: usize,
     tree_address: usize,
-    expected_pk: &HypertreePublicKey,
+    expected_pk: &Digest,
 ) -> bool {
     let mut current_message = hash_inter_layer_message(message, 0);
 
@@ -274,7 +274,7 @@ pub fn hypertree_verify(
             current_message = next_msg;
         } else {
             // Top layer: the recovered root is the public key.
-            return HypertreePublicKey(layer_root) == *expected_pk;
+            return layer_root == *expected_pk;
         }
 
         let _ = layer_tree_address;
@@ -301,6 +301,6 @@ mod tests {
         let tree_address = 0;
 
         let sig = hypertree_sign(&sk, &message, leaf_index, tree_address);
-        assert!(hypertree_verify(&sig, &message, leaf_index, tree_address, &pk));
+        assert!(hypertree_verify(&sig, &message, leaf_index, tree_address, &pk.0));
     }
 }

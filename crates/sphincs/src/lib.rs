@@ -8,7 +8,6 @@ pub mod wots;
 
 pub use fors::*;
 pub use hypertree::*;
-pub use sphincs::*;
 pub use wots::*;
 
 use backend::KoalaBear;
