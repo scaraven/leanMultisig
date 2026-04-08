@@ -149,3 +149,34 @@ fn is_valid_encoding(encoding: &[u8]) -> bool {
         && encoding.iter().map(|&x| x as usize).sum::<usize>() == TARGET_SUM
         && encoding[V..].iter().all(|&x| x as usize == CHAIN_LENGTH - 1)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_wots_sign_recover_roundtrip() {
+        let mut rng = rand::rng();
+
+        // Deterministic, non-random-looking message digest.
+        let message = poseidon16_compress_pair(&Digest::default(), &Digest::default());
+        let layer_index = 0u32;
+
+        // Deterministic secret key material so the test doesn't depend on RNG support for Digest.
+        let pre_images: [Digest; SPX_WOTS_LEN] = std::array::from_fn(|i| {
+            let mut d = Digest::default();
+            d[0] = F::new(i as u32);
+            d[1] = F::new((i as u32).wrapping_mul(17));
+            d
+        });
+        let sk = WotsSecretKey::new(pre_images);
+
+        let (randomness, _encoding, _iters) =
+            find_randomness_for_wots_encoding(&message, layer_index, &mut rng);
+
+        let sig = sk.sign_with_randomness(&message, layer_index, randomness);
+        let recovered = sig.recover_public_key(&message, layer_index).expect("valid signature");
+
+        assert_eq!(recovered, *sk.public_key());
+    }
+}

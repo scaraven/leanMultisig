@@ -15,6 +15,7 @@ use crate::*;
 // Secret values are derived from the master seed:
 //   rng_seed = seed ‖ 0x02 ‖ fors_tree_index as u8 ‖ leaf_index.to_le_bytes()
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ForsSecretKey {
     seed: [u8; 20],
     /// Materialised leaf secrets: [tree][leaf]
@@ -198,4 +199,40 @@ pub fn extract_fors_indices(mhash: &[u8; SPX_FORS_MSG_BYTES]) -> [usize; SPX_FOR
 
         ((window >> bit_in_byte) as usize) & mask
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_fors_indices_basic_properties() {
+        // mhash is 17 bytes = 136 bits; this should deterministically map to 9 15-bit indices.
+        let mhash = [0xA5u8; SPX_FORS_MSG_BYTES];
+        let indices = extract_fors_indices(&mhash);
+
+        // All indices must be < 2^SPX_FORS_HEIGHT.
+        for &idx in indices.iter() {
+            assert!(idx < (1 << SPX_FORS_HEIGHT));
+        }
+
+        // Determinism: repeated calls match.
+        assert_eq!(indices, extract_fors_indices(&mhash));
+    }
+
+    #[test]
+    #[ignore = "FORS keygen materializes 9*(2^15) leaves; too slow for default unit tests"]
+    fn test_fors_sign_verify_roundtrip_ignored() {
+        // NOTE: This roundtrip is correct but extremely expensive in this implementation.
+        // Run explicitly with: cargo test -p sphincs -- --ignored
+        let seed = [7u8; 20];
+        let (sk, pk) = fors_key_gen(seed);
+
+        let mhash = [0x11u8; SPX_FORS_MSG_BYTES];
+        let indices = extract_fors_indices(&mhash);
+        let sig = fors_sign(&sk, &indices);
+        let recovered_pk = fors_verify(&sig, &indices).expect("valid signature");
+
+        assert_eq!(pk, recovered_pk);
+    }
 }

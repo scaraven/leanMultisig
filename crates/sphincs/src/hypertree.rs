@@ -20,9 +20,21 @@ use crate::*;
 
 const TREE_MASK: usize = (1 << SPX_TREE_HEIGHT) - 1;
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HypertreeSecretKey {
     /// Master seed — trees are materialised on demand, never cached.
     seed: [u8; 20],
+}
+
+impl HypertreeSecretKey {
+    pub fn new(seed: [u8; 20]) -> Self {
+        Self { seed }
+    }
+
+    pub fn public_key(&self) -> HypertreePublicKey {
+        let (root, _) = build_layer_tree(&self.seed, SPX_D - 1, 0);
+        HypertreePublicKey(root)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -146,15 +158,6 @@ fn hash_inter_layer_message(child_root: &Digest, layer: usize) -> Digest {
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Generate a SPHINCS+ hypertree key pair.
-///
-/// Only materialises the top-level tree (layer = SPX_D-1, tree_address = 0).
-/// The public key is the root of that tree.
-pub fn hypertree_key_gen(seed: [u8; 20]) -> (HypertreeSecretKey, HypertreePublicKey) {
-    let (root, _levels) = build_layer_tree(&seed, SPX_D - 1, 0);
-    (HypertreeSecretKey { seed }, HypertreePublicKey(root))
-}
-
 fn calculate_address_info(leaf_index: usize, tree_address: usize, layer: usize) -> (usize, usize, usize) {
     // Subtree address for this layer.
     let layer_tree_address = tree_address >> (layer * SPX_TREE_HEIGHT);
@@ -188,7 +191,7 @@ pub fn hypertree_sign(
     leaf_index: usize,
     tree_address: usize,
 ) -> HypertreeSignature {
-    let mut current_message = *message;
+    let mut current_message = hash_inter_layer_message(message, 0);
 
     let mut rng = rand::rng();
 
@@ -234,7 +237,7 @@ pub fn hypertree_verify(
     tree_address: usize,
     expected_pk: &HypertreePublicKey,
 ) -> bool {
-    let mut current_message = *message;
+    let mut current_message = hash_inter_layer_message(message, 0);
 
     for (layer, layer_sig) in sig.layers.iter().enumerate() {
         let (layer_tree_address, layer_leaf_index, _) = calculate_address_info(leaf_index, tree_address, layer);
@@ -278,4 +281,26 @@ pub fn hypertree_verify(
     }
 
     unreachable!("SPX_D layers iterated without returning")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Perform a full sign-then-verify flow test for the hypertree. This is a basic correctness test
+    #[test]
+    fn test_hypertree_sign_verify() {
+        let seed = [42u8; 20];
+        let sk = HypertreeSecretKey::new(seed);
+        let pk = sk.public_key();
+
+        // Deterministic message digest.
+        let message = poseidon16_compress_pair(&Digest::default(), &Digest::default());
+
+        let leaf_index = 0;
+        let tree_address = 0;
+
+        let sig = hypertree_sign(&sk, &message, leaf_index, tree_address);
+        assert!(hypertree_verify(&sig, &message, leaf_index, tree_address, &pk));
+    }
 }
