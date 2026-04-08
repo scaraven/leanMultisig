@@ -74,9 +74,7 @@ pub fn fors_key_gen(seed: [u8; 20]) -> (ForsSecretKey, ForsPublicKey) {
     let mut all_nodes: Vec<Vec<Vec<Digest>>> = Vec::with_capacity(SPX_FORS_TREES);
 
     for t in 0..SPX_FORS_TREES {
-        let secrets: Vec<Digest> = (0..num_leaves)
-            .map(|l| derive_leaf_secret(&seed, t, l))
-            .collect();
+        let secrets: Vec<Digest> = (0..num_leaves).map(|l| derive_leaf_secret(&seed, t, l)).collect();
 
         // Level 0: hash of each secret value.
         let leaf_hashes: Vec<Digest> = secrets.iter().map(hash_leaf).collect();
@@ -97,7 +95,11 @@ pub fn fors_key_gen(seed: [u8; 20]) -> (ForsSecretKey, ForsPublicKey) {
     }
 
     let pk = fors_public_key_from_nodes(&all_nodes);
-    let sk = ForsSecretKey { seed, leaf_secrets: all_secrets, nodes: all_nodes };
+    let sk = ForsSecretKey {
+        seed,
+        leaf_secrets: all_secrets,
+        nodes: all_nodes,
+    };
     (sk, pk)
 }
 
@@ -140,10 +142,7 @@ pub enum ForsVerifyError {
 }
 
 /// Verify a FORS signature and recover the FORS public key.
-pub fn fors_verify(
-    sig: &ForsSignature,
-    indices: &[usize; SPX_FORS_TREES],
-) -> Result<ForsPublicKey, ForsVerifyError> {
+pub fn fors_verify(sig: &ForsSignature, indices: &[usize; SPX_FORS_TREES]) -> Result<ForsPublicKey, ForsVerifyError> {
     let mut roots = [Digest::default(); SPX_FORS_TREES];
     for (t, (tree_sig, &leaf_idx)) in sig.trees.iter().zip(indices.iter()).enumerate() {
         if tree_sig.auth_path.len() != SPX_FORS_HEIGHT {

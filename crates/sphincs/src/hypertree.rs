@@ -12,7 +12,7 @@ use crate::*;
 //
 // Tree addressing:
 //   tree_address is a 22-bit value (SPX_TREE_BITS). At layer l, the relevant subtree is:
-//     layer_tree_address = tree_address >> (l * SPX_TREE_HEIGHT)  (truncated to 11 bits)
+//     layer_tree_address = tree_address >> (l * SPX_TREE_HEIGHT)
 //   The leaf within that tree at layer l is:
 //     layer 0: leaf_index (bottom 11 bits)
 //     layer l>0: lower SPX_TREE_HEIGHT bits of the layer below's tree_address component
@@ -48,45 +48,35 @@ pub struct HypertreeLayerSig {
 
 /// Derive the WOTS+ pre-images for a given (layer, leaf_index) from the master seed.
 ///
-/// Input Digest layout:
-///   [0..5] : seed packed as 5 little-endian u32s (20 bytes)
-///   [5]    : domain marker 0x00 (WOTS pre-images)
-///   [6]    : layer as u32
-///   [7]    : leaf_index as u32
+/// Input layout (Poseidon 16-state via two Digests):
+///   left[0..5] : seed packed as 5 little-endian u32s (20 bytes)
+///   left[5]    : domain marker 0x00 (WOTS pre-images)
+///   left[6]    : layer as u32
+///   left[7]    : 0
+///   right[0]   : leaf_index low 32 bits
+///   right[1]   : leaf_index high 32 bits
+///   right[2]   : chain index (0..SPX_WOTS_LEN-1)
 fn derive_wots_preimages(seed: &[u8; 20], layer: usize, leaf_index: usize) -> [Digest; SPX_WOTS_LEN] {
     // Each chain gets its own PRF output so chain secrets are independent.
     std::array::from_fn(|chain| {
-        let mut input = Digest::default();
+        let mut left = Digest::default();
         for (i, chunk) in seed.chunks_exact(4).enumerate() {
-            input[i] = F::new(u32::from_le_bytes(chunk.try_into().unwrap()));
+            left[i] = F::new(u32::from_le_bytes(chunk.try_into().unwrap()));
         }
-        input[5] = F::new(0x00);
-        input[6] = F::new(layer as u32);
-        // Encode (leaf_index, chain) together so each chain secret is unique.
-        // Leaf index is at most 11 bits, SPX_WOTS_LEN is 32 (8 bits) so at most 19 bits are needed, which fits in a u32
-        input[7] = F::new((leaf_index * SPX_WOTS_LEN + chain) as u32);
-        poseidon16_compress_pair(&input, &Digest::default())
-    })
-}
+        left[5] = F::new(0x00);
+        left[6] = F::new(layer as u32);
 
-/// Derive the WOTS+ randomness for a given (layer, leaf_index) deterministically.
-///
-/// Input Digest layout:
-///   [0..5] : seed packed as 5 little-endian u32s (20 bytes)
-///   [5]    : domain marker 0x01 (WOTS randomness)
-///   [6]    : layer as u32
-///   [7]    : leaf_index as u32
-fn derive_wots_randomness(seed: &[u8; 20], layer: usize, leaf_index: usize) -> [F; RANDOMNESS_LEN_FE] {
-    let mut input = Digest::default();
-    for (i, chunk) in seed.chunks_exact(4).enumerate() {
-        input[i] = F::new(u32::from_le_bytes(chunk.try_into().unwrap()));
-    }
-    input[5] = F::new(0x01);
-    input[6] = F::new(layer as u32);
-    input[7] = F::new(leaf_index as u32);
-    let hash = poseidon16_compress_pair(&input, &Digest::default());
-    // Take the first RANDOMNESS_LEN_FE = 7 elements of the hash output.
-    hash[..RANDOMNESS_LEN_FE].try_into().unwrap()
+        let leaf_u64 = leaf_index as u64;
+        let leaf_lo = (leaf_u64 & 0xFFFF_FFFF) as u32;
+        let leaf_hi = (leaf_u64 >> 32) as u32;
+
+        let mut right = Digest::default();
+        right[0] = F::new(leaf_lo);
+        right[1] = F::new(leaf_hi);
+        right[2] = F::new(chain as u32);
+
+        poseidon16_compress_pair(&left, &right)
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -146,33 +136,12 @@ fn extract_auth_path(levels: &[Vec<Digest>], leaf_index: usize) -> Vec<Digest> {
 /// Input layout:
 ///   left[0..8]  = child_merkle_root   (full Digest, 8 FEs)
 ///   right[0]    = layer_index as F    (the layer being signed INTO, i.e. child layer + 1)
-///   right[1]    = randomness_counter  (retry counter for TARGET_SUM constraint)
 ///   right[2..8] = F::default()
-fn hash_inter_layer_message(child_root: &Digest, layer: usize, randomness_counter: u32) -> Digest {
+fn hash_inter_layer_message(child_root: &Digest, layer: usize) -> Digest {
     let mut right = Digest::default();
     right[0] = F::new(layer as u32);
-    right[1] = F::new(randomness_counter);
     poseidon16_compress_pair(child_root, &right)
 }
-
-/// Find the smallest randomness_counter such that the inter-layer message hash produces
-/// a Digest that `wots_encode` accepts (indices sum to TARGET_SUM).
-///
-/// Deterministic — no RNG. Returns (counter, message_digest).
-fn find_inter_layer_message(
-    child_root: &Digest,
-    layer: usize,
-    randomness: &[F; RANDOMNESS_LEN_FE],
-) -> (u32, Digest) {
-    for counter in 0u32.. {
-        let msg = hash_inter_layer_message(child_root, layer, counter);
-        if wots_encode(&msg, layer as u32, randomness).is_some() {
-            return (counter, msg);
-        }
-    }
-    unreachable!("find_inter_layer_message did not converge")
-}
-
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -186,6 +155,19 @@ pub fn hypertree_key_gen(seed: [u8; 20]) -> (HypertreeSecretKey, HypertreePublic
     (HypertreeSecretKey { seed }, HypertreePublicKey(root))
 }
 
+fn calculate_address_info(leaf_index: usize, tree_address: usize, layer: usize) -> (usize, usize, usize) {
+    // Subtree address for this layer.
+    let layer_tree_address = tree_address >> (layer * SPX_TREE_HEIGHT);
+    // Leaf within this layer's tree.
+    let layer_leaf_index = if layer == 0 {
+        leaf_index
+    } else {
+        (tree_address >> ((layer - 1) * SPX_TREE_HEIGHT)) & TREE_MASK
+    };
+    let global_leaf = layer_tree_address * (1 << SPX_TREE_HEIGHT) + layer_leaf_index;
+    (layer_tree_address, layer_leaf_index, global_leaf)
+}
+
 /// Sign `message` (a Digest) with the hypertree.
 ///
 /// `leaf_index`: selects the WOTS key within the layer-0 tree (0..2047).
@@ -197,9 +179,9 @@ pub fn hypertree_key_gen(seed: [u8; 20]) -> (HypertreeSecretKey, HypertreePublic
 ///   1. Determine layer_tree_address and layer_leaf_index.
 ///   2. build_layer_tree → (root, levels).
 ///   3. derive_wots_preimages + WotsSecretKey::new.
-///   4. derive_wots_randomness; sign_with_randomness(message, layer, root[..6], randomness).
+///   4. find_randomness_for_wots_encoding; sign_with_randomness(message, layer, root[..6], randomness).
 ///   5. extract_auth_path.
-///   6. For layers 0..SPX_D-2: find_inter_layer_message(root) → message for next layer.
+///   6. For layers 0..SPX_D-2: hash_inter_layer_message(root) → message for next layer.
 pub fn hypertree_sign(
     sk: &HypertreeSecretKey,
     message: &Digest,
@@ -207,32 +189,26 @@ pub fn hypertree_sign(
     tree_address: usize,
 ) -> HypertreeSignature {
     let mut current_message = *message;
-    let layers = std::array::from_fn(|layer| {
-        // Subtree address for this layer.
-        let layer_tree_address = tree_address >> (layer * SPX_TREE_HEIGHT);
-        // Leaf within this layer's tree.
-        let layer_leaf_index = if layer == 0 {
-            leaf_index
-        } else {
-            (tree_address >> ((layer - 1) * SPX_TREE_HEIGHT)) & TREE_MASK
-        };
+
+    let mut rng = rand::rng();
+
+    let layers: [HypertreeLayerSig; SPX_D] = std::array::from_fn(|layer| {
+        let (layer_tree_address, layer_leaf_index, global_leaf) =
+            calculate_address_info(leaf_index, tree_address, layer);
 
         let (root, levels) = build_layer_tree(&sk.seed, layer, layer_tree_address);
-        let global_leaf = layer_tree_address * (1 << SPX_TREE_HEIGHT) + layer_leaf_index;
 
         let preimages = derive_wots_preimages(&sk.seed, layer, global_leaf);
         let wots_sk = WotsSecretKey::new(preimages);
 
-        let randomness = derive_wots_randomness(&sk.seed, layer, global_leaf);
+        let (randomness, _, _) = find_randomness_for_wots_encoding(&current_message, layer as u32, &mut rng);
         let wots_sig = wots_sk.sign_with_randomness(&current_message, layer as u32, randomness);
 
         let auth_path = extract_auth_path(&levels, layer_leaf_index);
 
         // Prepare message for the next layer (not needed after the top layer).
         if layer < SPX_D - 1 {
-            let next_randomness = derive_wots_randomness(&sk.seed, layer + 1, global_leaf);
-            let (_counter, next_msg) =
-                find_inter_layer_message(&root, layer + 1, &next_randomness);
+            let next_msg = hash_inter_layer_message(&root, layer + 1);
             current_message = next_msg;
         }
 
@@ -256,24 +232,25 @@ pub fn hypertree_verify(
     message: &Digest,
     leaf_index: usize,
     tree_address: usize,
-) -> HypertreePublicKey {
+    expected_pk: &HypertreePublicKey,
+) -> bool {
     let mut current_message = *message;
 
     for (layer, layer_sig) in sig.layers.iter().enumerate() {
-        let layer_tree_address = tree_address >> (layer * SPX_TREE_HEIGHT);
-        let layer_leaf_index = if layer == 0 {
-            leaf_index
-        } else {
-            (tree_address >> ((layer - 1) * SPX_TREE_HEIGHT)) & TREE_MASK
-        };
+        let (layer_tree_address, layer_leaf_index, _) = calculate_address_info(leaf_index, tree_address, layer);
 
-        let wots_pk = layer_sig
-            .wots_sig
-            .recover_public_key(&current_message, layer as u32)
-            .expect("wots encoding invalid during hypertree_verify");
+        let wots_pk = match layer_sig.wots_sig.recover_public_key(&current_message, layer as u32) {
+            Some(pk) => pk,
+            None => return false, // Invalid WOTS signature
+        };
 
         // Hash the recovered public key to get the leaf node.
         let mut current = wots_pk.hash();
+
+        // Fail if auth_path is not the correct length
+        if layer_sig.auth_path.len() != SPX_TREE_HEIGHT {
+            return false;
+        }
 
         // Walk the auth path up to recover the layer's Merkle root.
         for (level, sibling) in layer_sig.auth_path.iter().enumerate() {
@@ -290,14 +267,11 @@ pub fn hypertree_verify(
 
         // Derive the next layer's message from this root.
         if layer < SPX_D - 1 {
-            // Randomness for the inter-layer message is stored in the next layer's WotsSignature.
-            let next_randomness = sig.layers[layer + 1].wots_sig.randomness;
-            let (_counter, next_msg) =
-                find_inter_layer_message(&layer_root, layer + 1, &next_randomness);
+            let next_msg = hash_inter_layer_message(&layer_root, layer + 1);
             current_message = next_msg;
         } else {
             // Top layer: the recovered root is the public key.
-            return HypertreePublicKey(layer_root);
+            return HypertreePublicKey(layer_root) == *expected_pk;
         }
 
         let _ = layer_tree_address;

@@ -39,9 +39,7 @@ impl WotsSecretKey {
     pub fn new(pre_images: [Digest; V]) -> Self {
         Self {
             pre_images,
-            public_key: WotsPublicKey(std::array::from_fn(|i| {
-                iterate_hash(pre_images[i], CHAIN_LENGTH - 1)
-            })),
+            public_key: WotsPublicKey(std::array::from_fn(|i| iterate_hash(pre_images[i], CHAIN_LENGTH - 1))),
         }
     }
 
@@ -67,11 +65,7 @@ impl WotsSecretKey {
 }
 
 impl WotsSignature {
-    pub fn recover_public_key(
-        &self,
-        message: &Digest,
-        layer_index: u32,
-    ) -> Option<WotsPublicKey> {
+    pub fn recover_public_key(&self, message: &Digest, layer_index: u32) -> Option<WotsPublicKey> {
         let encoding = wots_encode(message, layer_index, &self.randomness)?;
         Some(WotsPublicKey(std::array::from_fn(|i| {
             iterate_hash(self.chain_tips[i], CHAIN_LENGTH - 1 - encoding[i] as usize)
@@ -117,11 +111,7 @@ pub fn find_randomness_for_wots_encoding(
 ///
 /// Extract 4-bit chunks from B (24 bits per element, little-endian), take first 32.
 /// Valid iff sum of indices == TARGET_SUM.
-pub fn wots_encode(
-    message: &Digest,
-    layer_index: u32,
-    randomness: &[F; RANDOMNESS_LEN_FE],
-) -> Option<[u8; V]> {
+pub fn wots_encode(message: &Digest, layer_index: u32, randomness: &[F; RANDOMNESS_LEN_FE]) -> Option<[u8; V]> {
     // A = poseidon(message (8 fe), randomness (7 fe) + 1 zero pad)
     let mut a_input_right = [F::default(); 8];
     a_input_right[..RANDOMNESS_LEN_FE].copy_from_slice(randomness);
