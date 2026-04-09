@@ -240,7 +240,7 @@ pub fn hypertree_verify(
     let mut current_message = hash_inter_layer_message(message, 0);
 
     for (layer, layer_sig) in sig.layers.iter().enumerate() {
-        let (layer_tree_address, layer_leaf_index, _) = calculate_address_info(leaf_index, tree_address, layer);
+        let (_, layer_leaf_index, _) = calculate_address_info(leaf_index, tree_address, layer);
 
         let wots_pk = match layer_sig.wots_sig.recover_public_key(&current_message, layer as u32) {
             Some(pk) => pk,
@@ -276,8 +276,6 @@ pub fn hypertree_verify(
             // Top layer: the recovered root is the public key.
             return layer_root == *expected_pk;
         }
-
-        let _ = layer_tree_address;
     }
 
     unreachable!("SPX_D layers iterated without returning")
