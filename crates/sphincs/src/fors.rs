@@ -23,6 +23,8 @@ pub struct ForsSecretKey {
     /// Materialised tree nodes: [tree][level][node]
     /// level 0 = leaf hashes, level SPX_FORS_HEIGHT = root
     nodes: Vec<Vec<Vec<Digest>>>,
+    // Cached material
+    root: Digest,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -100,6 +102,7 @@ pub fn fors_key_gen(seed: [u8; 20]) -> (ForsSecretKey, ForsPublicKey) {
         seed,
         leaf_secrets: all_secrets,
         nodes: all_nodes,
+        root: pk.0,
     };
     (sk, pk)
 }
@@ -175,7 +178,7 @@ pub fn fors_verify(sig: &ForsSignature, indices: &[usize; SPX_FORS_TREES]) -> Re
 
 impl ForsSecretKey {
     pub fn public_key(&self) -> ForsPublicKey {
-        fors_public_key_from_nodes(&self.nodes)
+        ForsPublicKey(self.root)
     }
 }
 

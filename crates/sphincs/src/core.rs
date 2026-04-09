@@ -1,4 +1,5 @@
 use backend::PrimeField32;
+use serde::{Deserialize, Serialize};
 use utils::poseidon16_compress_pair;
 
 use crate::fors::ForsSignature;
@@ -8,7 +9,8 @@ use crate::{
     SPX_FORS_MSG_BYTES, SPX_LEAF_BITS, SPX_TREE_BITS, fors, hypertree,
 };
 
-struct SphincsSecretKey {
+#[derive(Debug)]
+pub struct SphincsSecretKey {
     seed: [u8; 20],
     // cached material
     fors_key: ForsSecretKey,
@@ -34,7 +36,7 @@ impl SphincsSecretKey {
         self.fors_pubkey
     }
 
-    pub fn sign(&self, message: [F; MESSAGE_LEN_FE]) -> Result<SphincsSig, Box<dyn std::error::Error>> {
+    pub fn sign(&self, message: &[F; MESSAGE_LEN_FE]) -> Result<SphincsSig, Box<dyn std::error::Error>> {
         // Hash the message to a digest so that we can extract the tree and leaf indices for the FORS signature.
         let mut right: [F; 8] = Default::default();
         right[0] = message[8];
@@ -51,7 +53,6 @@ impl SphincsSecretKey {
             hypertree::hypertree_sign(&self.into(), &fors_pk.0, leaf_idx, tree_address);
 
         Ok(SphincsSig {
-            message,
             fors_sig,
             hypertree_sig,
         })
@@ -71,12 +72,13 @@ impl Into<HypertreeSecretKey> for &SphincsSecretKey {
     }
 }
 
-struct SphincsPublicKey {
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SphincsPublicKey {
     root: Digest,
 }
 
-struct SphincsSig {
-    pub message: [F; MESSAGE_LEN_FE],
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SphincsSig {
     pub fors_sig: ForsSignature,
     pub hypertree_sig: HypertreeSignature,
 }
@@ -119,7 +121,7 @@ fn extract_digest_hash(digest: &Digest) -> Result<(usize, usize, [u8; SPX_FORS_M
 }
 
 impl SphincsPublicKey {
-    pub fn verify(&self, message: [F; MESSAGE_LEN_FE], sig: &SphincsSig) -> bool {
+    pub fn verify(&self, message: &[F; MESSAGE_LEN_FE], sig: &SphincsSig) -> bool {
         let mut right: [F; 8] = Default::default();
         right[0] = message[8];
         let message_digest = poseidon16_compress_pair(&message[0..8].try_into().unwrap(), &right);
@@ -136,7 +138,6 @@ impl SphincsPublicKey {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,8 +147,8 @@ mod tests {
     fn test_sphincs_sign_verify() {
         let message = [F::new(0); MESSAGE_LEN_FE];
         let sk = SphincsSecretKey::new([0; 20]);
-        let sig = sk.sign(message).unwrap();
+        let sig = sk.sign(&message).unwrap();
         let pk = sk.public_key();
-        assert!(pk.verify(message, &sig));
+        assert!(pk.verify(&message, &sig));
     }
 }

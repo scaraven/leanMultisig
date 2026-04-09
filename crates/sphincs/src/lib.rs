@@ -3,7 +3,7 @@
 pub mod fors;
 pub mod hypertree;
 // pub mod signers_cache;  // TODO: not yet implemented
-pub mod sphincs;
+pub mod core;
 pub mod wots;
 
 pub use fors::*;
