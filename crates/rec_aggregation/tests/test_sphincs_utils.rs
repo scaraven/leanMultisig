@@ -10,8 +10,7 @@ fn test_fold_roots_sphincs() {
     let bytecode = compile_program(&ProgramSource::Filepath(path));
 
     let mut rng = StdRng::seed_from_u64(0);
-    let data: [[F; DIGEST_LEN]; SPX_FORS_TREES] =
-        std::array::from_fn(|_| std::array::from_fn(|_| rng.random()));
+    let data: [[F; DIGEST_LEN]; SPX_FORS_TREES] = std::array::from_fn(|_| std::array::from_fn(|_| rng.random()));
     let hash = fold_roots(&data);
     // Flatten [[F; DIGEST_LEN]; SPX_FORS_TREES] into Vec<F>, then append the hash
     let mut public_input: Vec<F> = data.iter().flatten().copied().collect();
