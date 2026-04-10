@@ -13,6 +13,7 @@ prox-gaps-conjecture = ["lean_prover/prox-gaps-conjecture"]
 utils.workspace = true
 xmss.workspace = true
 rand.workspace = true
+sphincs.workspace = true
 
 tracing.workspace = true
 air.workspace = true

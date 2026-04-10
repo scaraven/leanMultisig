@@ -12,10 +12,11 @@ and all public keys hash to the committed `pubkeys_hash`.
 
 ```
 crates/rec_aggregation/
-  sphincs_wots.py        # WOTS+ chain hashing and public key recovery
-  sphincs_fors.py        # FORS tree verification (imports sphincs_wots)
-  sphincs_hypertree.py   # Hypertree verification (imports sphincs_wots)
-  sphincs_aggregate.py   # Message digest decomposition + top-level verify
+  sphincs_utils.py       # Shared helpers: do_1_merkle_level, iterate_hash, fold helpers
+  sphincs_wots.py        # WOTS+ chain hashing and public key recovery (imports sphincs_utils)
+  sphincs_fors.py        # FORS tree verification (imports sphincs_wots, sphincs_utils)
+  sphincs_hypertree.py   # Hypertree verification (imports sphincs_wots, sphincs_utils)
+  sphincs_aggregate.py   # Digest decomposition + top-level verify
   main_sphincs.py        # Main entry point (no recursion)
 ```
 
@@ -45,12 +46,13 @@ MESSAGE_LEN     = 9     # FEs
 Analogous to `hint_xmss`, one flat `Vec<F>` per signature fed out-of-band.
 
 ```
-SIG_SIZE_FE = SPX_FORS_TREES * (1 + SPX_FORS_HEIGHT) * DIGEST_LEN
-            + SPX_D * (RANDOMNESS_LEN + SPX_WOTS_LEN * DIGEST_LEN + SPX_TREE_HEIGHT * DIGEST_LEN)
-            = 9 * 16 * 8  +  3 * (7 + 32*8 + 11*8)
-            = 1152        +  3 * (7 + 256 + 88)
-            = 1152        +  1053
-            = 2205 FEs
+FORS_SIG_SIZE_FE      = SPX_FORS_TREES * (1 + SPX_FORS_HEIGHT) * DIGEST_LEN
+                       = 9 * (1 + 15) * 8 = 1152 FEs
+
+HYPERTREE_SIG_SIZE_FE = SPX_D * (RANDOMNESS_LEN + SPX_WOTS_LEN * DIGEST_LEN + SPX_TREE_HEIGHT * DIGEST_LEN)
+                       = 3 * (7 + 32*8 + 11*8) = 3 * 351 = 1053 FEs
+
+SIG_SIZE_FE           = FORS_SIG_SIZE_FE + HYPERTREE_SIG_SIZE_FE = 2205 FEs
 
 Layout:
   [ FORS section ]
@@ -167,13 +169,18 @@ for i in 2..9:
 
 Implements the 3-layer XMSS hypertree.
 
-### `hypertree_verify(hypertree_sig, fors_pubkey, leaf_idx, tree_address, expected_pk)`
+### `hypertree_verify(hypertree_sig, fors_pubkey, layer_leaf_indices, expected_pk)`
+
+Accepts the three precomputed `layer_leaf_indices[3]` from `decompose_message_digest`
+rather than computing them in-loop. Since `l` is compile-time-unrolled, each
+`layer_leaf_indices[l]` access resolves to a constant index with no dynamic shift
+logic inside the loop body.
 
 ```
 # Initial message: hash FORS pubkey with domain separator for layer 0
 current_message = poseidon16_compress(fors_pubkey, [0, 0, 0, 0, 0, 0, 0, 0])
 
-for l in unroll(0, SPX_D):    # 3 layers
+for l in unroll(0, SPX_D):    # 3 layers (compile-time unroll)
     wots_sig_ptr   = hypertree_sig + l * (RANDOMNESS_LEN + SPX_WOTS_LEN + SPX_TREE_HEIGHT) * DIGEST_LEN
     randomness_ptr = wots_sig_ptr
     chain_tips_ptr = wots_sig_ptr + RANDOMNESS_LEN
@@ -182,31 +189,17 @@ for l in unroll(0, SPX_D):    # 3 layers
     # 1. Recover WOTS pubkey + hash it to leaf node
     wots_leaf = wots_encode_and_complete(current_message, l, randomness_ptr, chain_tips_ptr)
 
-    # 2. Compute layer_leaf_index from (leaf_idx, tree_address, l)
-    layer_leaf_index = compute_layer_leaf_index(leaf_idx, tree_address, l)
-
+    # 2. layer_leaf_indices[l] already computed; no dynamic shift needed here
     # 3. Walk 11-level auth path → recover layer root
     if l < SPX_D - 1:
         layer_root = Array(DIGEST_LEN)
-        hypertree_merkle_verify(layer_leaf_index, wots_leaf, auth_path_ptr, layer_root)
+        hypertree_merkle_verify(layer_leaf_indices[l], wots_leaf, auth_path_ptr, layer_root)
         # Prepare next message: hash layer root with domain separator
         current_message = poseidon16_compress(layer_root, [l+1, 0, 0, 0, 0, 0, 0, 0])
     else:
         # Final layer: check root == expected_pk
-        hypertree_merkle_verify(layer_leaf_index, wots_leaf, auth_path_ptr, expected_pk)
+        hypertree_merkle_verify(layer_leaf_indices[l], wots_leaf, auth_path_ptr, expected_pk)
 ```
-
-### `compute_layer_leaf_index(leaf_idx, tree_address, l) -> index`
-
-From `hypertree.rs::calculate_address_info`:
-```
-layer 0:  layer_leaf_index = leaf_idx                             (11-bit value)
-layer l>0: layer_leaf_index = (tree_address >> ((l-1) * 11)) & 0x7FF
-```
-Since l is unrolled (compile-time constant), the shifts are constant. However,
-`leaf_idx` and `tree_address` are runtime values extracted from the message digest.
-
-**See: Open Question 2 — extracting leaf_idx and tree_address from field elements.**
 
 ### `hypertree_merkle_verify(layer_leaf_index, leaf_node, auth_path, expected_root)`
 
@@ -220,7 +213,50 @@ and dispatches via `do_1_merkle_level`. Identical structure to `fors_merkle_veri
 
 Top-level SPHINCS+ verifier. Handles message digest decomposition and calls FORS + hypertree.
 
-### `sphincs_verify(pk, message, sig)`
+### `decompose_message_digest(message_digest) -> (fors_indices, layer_leaf_indices)`
+
+Single-pass decomposition: one hint path, one check path. Outputs only the indices
+needed by Merkle routing and FORS; does not materialise full mhash bytes. The 3 layer
+leaf indices are precomputed here and passed directly into `hypertree_verify`.
+
+```
+# Hint all values in a single pass
+leaf_idx        = hint_val()              # 11-bit: FE[0] bits 0–10
+tree_address    = hint_val()              # 22-bit: FE[0] bits 16–31 + FE[1] bits 0–5
+fors_indices[9] = [hint_val() for 0..9]  # each 15-bit; 9×15 = 135 bits total
+
+# Range checks
+range_check(leaf_idx,     2**11)
+range_check(tree_address, 2**22)
+for i in 0..9: range_check(fors_indices[i], 2**15)
+
+# Verify FE[0]: leaf_idx at bits 0–10; lower 16 bits of tree_address at bits 16–31
+#   (bits 11–15 are 0 by the digest layout)
+tree_address_lo = tree_address & 0xFFFF
+assert message_digest[0] == leaf_idx + (tree_address_lo << 16)
+
+# Verify FE[1..5]: tree_address_hi (bits 16–21) at FE[1] bits 0–5;
+#   fors_indices bit-packed LE into 135 contiguous bits starting at FE[1] bit 8.
+#   Assert each reconstructed FE slice == message_digest[1..5].
+#   The 136th mhash bit is left unconstrained (unused per fors.rs:187).
+tree_address_hi = tree_address >> 16
+# ... reconstruct FE[1..5] from tree_address_hi + fors_indices bit-pack;
+#     assert vs message_digest[1..5]  (mechanical field arithmetic, one expression per FE)
+
+# Precompute Merkle routing indices once; no repeated shift logic inside hypertree loop
+layer_leaf_indices = [
+    leaf_idx,                       # layer 0: leaf within bottom XMSS tree
+    tree_address & 0x7FF,           # layer 1: bits  0–10 of tree_address
+    (tree_address >> 11) & 0x7FF,   # layer 2: bits 11–21 of tree_address
+]
+
+return fors_indices, layer_leaf_indices
+```
+
+The `...` marks mechanical but verbose bit-packing arithmetic; the pattern is
+identical for each FE and follows directly from the OQ2 layout table.
+
+### `sphincs_verify(pk, message, fors_sig, hypertree_sig)`
 
 ```
 # 1. Hash message to 8-FE digest
@@ -228,27 +264,15 @@ right = Array(DIGEST_LEN)
 right[0] = message[8]
 message_digest = poseidon16_compress(message, right)   # 1 Poseidon call
 
-# 2. Extract leaf_idx (11 bits), tree_address (22 bits), mhash (136 bits = 17 bytes)
-#    from message_digest (8 FEs serialised as 8 × LE u32 = 32 bytes)
-leaf_idx, tree_address, mhash_fes = hint_decompose_digest(message_digest)
+# 2. Decompose digest once — single hint pass, single check path
+fors_indices, layer_leaf_indices = decompose_message_digest(message_digest)
 
-# 3. Verify the decomposition is consistent with message_digest
-# (range checks + reconstruction)
-
-# 4. Extract 9 FORS leaf indices from mhash (9 × 15-bit chunks from 136 bits)
-fors_indices = hint_extract_fors_indices(mhash_fes)
-# Range-check each index < 2^15, verify bit-pack reconstruction
-
-# 5. Verify FORS
-fors_sig = sig
+# 3. Verify FORS
 fors_pubkey = fors_verify(fors_sig, fors_indices)
 
-# 6. Verify hypertree
-hypertree_sig = sig + SPX_FORS_TREES * (1 + SPX_FORS_HEIGHT) * DIGEST_LEN
-hypertree_verify(hypertree_sig, fors_pubkey, leaf_idx, tree_address, pk)
+# 4. Verify hypertree (layer_leaf_indices already computed; no repeated shifts)
+hypertree_verify(hypertree_sig, fors_pubkey, layer_leaf_indices, pk)
 ```
-
-**See: Open Question 2 (digest decomposition) and Open Question 4 (FORS index extraction).**
 
 ---
 
@@ -265,6 +289,16 @@ Total: 18 FEs
 
 No slot, no merkle chunks for slot (those are XMSS-specific). Message is shared.
 
+### Private input layout
+
+```
+[ ptr_pubkeys(1) | pubkeys(n_sigs × DIGEST_LEN) ]
+```
+
+No `source_0` / `n_raw` indexing structure. Signature data arrives entirely through
+the two dedicated hint streams (`hint_sphincs_fors` and `hint_sphincs_hypertree`),
+one pair of calls per signer inside the loop.
+
 ### `main()`
 
 ```python
@@ -276,12 +310,8 @@ message = pub_mem + 1 + DIGEST_LEN
 priv_start: Imu
 hint_private_input_start(priv_start)
 
-# priv_start layout: [ptr_pubkeys | pubkeys | source_0]
-# source_0: [n_raw, idx_0, idx_1, ...]
+# priv_start layout: [ptr_pubkeys | pubkeys]
 all_pubkeys = priv_start[0]
-source_0 = priv_start + 1 + n_sigs * DIGEST_LEN
-n_raw = source_0[0]
-assert n_raw == n_sigs
 
 # Hash all pubkeys to check pubkeys_hash
 computed_hash = slice_hash_pubkeys(all_pubkeys, n_sigs)
@@ -290,9 +320,11 @@ copy_8(computed_hash, pubkeys_hash_expected)
 # Verify each signature
 for i in parallel_range(0, n_sigs):
     pk = all_pubkeys + i * DIGEST_LEN
-    sig = Array(SIG_SIZE_FE)
-    hint_sphincs(sig)
-    sphincs_verify(pk, message, sig)
+    fors_sig = Array(FORS_SIG_SIZE_FE)
+    hint_sphincs_fors(fors_sig)                     # loads 1152 FEs
+    hypertree_sig = Array(HYPERTREE_SIG_SIZE_FE)
+    hint_sphincs_hypertree(hypertree_sig)            # loads 1053 FEs
+    sphincs_verify(pk, message, fors_sig, hypertree_sig)
 ```
 
 ---
@@ -343,9 +375,13 @@ def do_1_merkle_level(bit, state_in, sibling, state_out):
     )
 ```
 
-The bits fed here come from the hint decompositions (OQ2/OQ4) and are already
-constrained to be binary as part of the reconstruction check — no separate boolean
-assertion needed.
+This function is defined **once** in `sphincs_utils.py` and imported by both
+`sphincs_fors.py` and `sphincs_hypertree.py`. A single shared implementation
+eliminates the risk of divergence between the FORS and hypertree path traversals.
+
+The bits fed here come from `decompose_message_digest` (see `sphincs_aggregate.py`)
+and are already constrained to be binary as part of the reconstruction check — no
+separate boolean assertion needed.
 
 Total path costs:
 - FORS: 15 levels × 9 trees = 135 `do_1_merkle_level` calls
@@ -478,16 +514,22 @@ level, and that is derived from `leaf_idx` and `tree_address` as described above
 main_sphincs.py
   └── sphincs_aggregate.py
         ├── sphincs_fors.py
-        │     └── (uses fold_roots, fors_merkle_verify)
+        │     ├── sphincs_utils.py  (do_1_merkle_level)
+        │     └── sphincs_wots.py
+        │           └── sphincs_utils.py  (iterate_hash, fold helpers)
         └── sphincs_hypertree.py
+              ├── sphincs_utils.py  (do_1_merkle_level)
               └── sphincs_wots.py
-                    └── (uses iterate_hash, fold_wots_pubkey)
+                    └── sphincs_utils.py  (iterate_hash, fold helpers)
 ```
+
+`sphincs_utils.py` is the single definition point for `do_1_merkle_level`,
+`iterate_hash`, `fold_wots_pubkey`, and `fold_roots`. Both `sphincs_fors.py` and
+`sphincs_hypertree.py` import from it to guarantee identical Merkle level behaviour.
 
 Dependencies on existing infrastructure:
 - `poseidon16_compress` — already available
 - `match_range` — already available (for chain length dispatch)
-- `hint_decompose_bits_xmss` — may reuse or create a SPHINCS+ variant
 - `slice_hash_with_iv_dynamic_unroll` — reuse for pubkeys_hash computation
 
 ---
