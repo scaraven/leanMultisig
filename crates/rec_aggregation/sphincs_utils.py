@@ -1,7 +1,7 @@
 from snark_lib import *
 from hashing import *
 
-# ── SPHINCS+ parameters ─────────────────────────────────────────────────────
+# SPHINCS+ Parameters
 SPX_WOTS_LEN    = 32   # V  — chains per WOTS instance
 SPX_WOTS_W      = 16   # CHAIN_LENGTH
 TARGET_SUM      = 240  # sum of all 32 encoding indices
@@ -15,26 +15,25 @@ MESSAGE_LEN     = 9    # FEs per message
 FORS_SIG_SIZE_FE      = SPX_FORS_TREES * (1 + SPX_FORS_HEIGHT) * DIGEST_LEN        # 1152
 HYPERTREE_SIG_SIZE_FE = SPX_D * (RANDOMNESS_LEN + SPX_WOTS_LEN * DIGEST_LEN + SPX_TREE_HEIGHT * DIGEST_LEN)  # 1053
 
+@inline
+def do_1_merkle_level(bit, state_in, sibling, state_out):
+    # Advance one binary Merkle level.
+    #
+    # Inputs:
+    #   bit       — position bit for this level, in {0, 1};
+    #               already binary-constrained by the caller's hint reconstruction
+    #   state_in  — DIGEST_LEN FEs: hash of the current node
+    #   sibling   — DIGEST_LEN FEs: sibling node hash from the auth path
+    # Output:
+    #   state_out — DIGEST_LEN FEs: poseidon(left, right) where
+    #               bit == 0 → left = state_in, right = sibling  (current is left child)
+    #               bit == 1 → left = sibling,  right = state_in (current is right child)
+    if bit == 0:
+        poseidon16_compress(state_in, sibling, state_out)
+    else:
+        poseidon16_compress(sibling, state_in, state_out)
+    return
 
-# ── Shared Merkle helper ─────────────────────────────────────────────────────
-
-# @inline
-# def do_1_merkle_level(bit, state_in, sibling, state_out):
-#     # Advance one binary Merkle level.
-#     #
-#     # Inputs:
-#     #   bit       — position bit for this level, in {0, 1};
-#     #               already binary-constrained by the caller's hint reconstruction
-#     #   state_in  — DIGEST_LEN FEs: hash of the current node
-#     #   sibling   — DIGEST_LEN FEs: sibling node hash from the auth path
-#     # Output:
-#     #   state_out — DIGEST_LEN FEs: poseidon(left, right) where
-#     #               bit == 0 → left = state_in, right = sibling  (current is left child)
-#     #               bit == 1 → left = sibling,  right = state_in (current is right child)
-#     pass
-
-
-# ── Chain helper ─────────────────────────────────────────────────────────────
 
 def _iterate_hash_const(input, k: Const, output, local_zero_buf):
     # Inner compile-time-constant implementation of iterate_hash.
@@ -63,34 +62,46 @@ def iterate_hash(input, n, output, local_zero_buf):
     match_range(n, range(0, SPX_WOTS_W), lambda k: _iterate_hash_const(input, k, output, local_zero_buf))
     return
 
+@inline
+def fold_wots_pubkey(chain_pub_keys, out):
+    # Fold SPX_WOTS_LEN (32) completed chain tips into a single WOTS+ public key digest.
+    # Matches WotsPublicKey::hash() in wots.rs:77-82.
+    # Sequential left-fold:
+    #   init = poseidon(chain_pub_keys[0], chain_pub_keys[1])
+    #   for i in 2..32: acc = poseidon(acc, chain_pub_keys[i])
+    # Costs 31 Poseidon calls.
+    #
+    # Input:
+    #   chain_pub_keys — SPX_WOTS_LEN * DIGEST_LEN FEs: completed chain-end hashes
+    # Output:
+    #   out — DIGEST_LEN FEs: folded public key hash
+    states = Array(SPX_WOTS_LEN * DIGEST_LEN)
+    for i in unroll(0, SPX_WOTS_LEN):
+        if i == 0:
+            copy_8(chain_pub_keys, states)
+        else:
+            poseidon16_compress(states + (i - 1) * DIGEST_LEN, chain_pub_keys + i * DIGEST_LEN, states + i * DIGEST_LEN)
+    copy_8(states + (SPX_WOTS_LEN - 1) * DIGEST_LEN, out)
+    return
 
-# ── Fold helpers ─────────────────────────────────────────────────────────────
 
-# @inline
-# def fold_wots_pubkey(chain_pub_keys, out):
-#     # Fold SPX_WOTS_LEN (32) completed chain tips into a single WOTS+ public key digest.
-#     # Sequential left-fold:
-#     #   acc = poseidon(chain_pub_keys[0], chain_pub_keys[1])
-#     #   for i in 2..32: acc = poseidon(acc, chain_pub_keys[i])
-#     # Costs 31 Poseidon calls.
-#     #
-#     # Input:
-#     #   chain_pub_keys — SPX_WOTS_LEN * DIGEST_LEN FEs: completed chain-end hashes
-#     # Output:
-#     #   out — DIGEST_LEN FEs: folded public key hash
-#     pass
-
-
-# @inline
-# def fold_roots(roots, out):
-#     # Fold SPX_FORS_TREES (9) FORS tree roots into the FORS public key digest.
-#     # Sequential left-fold:
-#     #   acc = poseidon(roots[0], roots[1])
-#     #   for i in 2..9: acc = poseidon(acc, roots[i])
-#     # Costs 8 Poseidon calls.
-#     #
-#     # Input:
-#     #   roots — SPX_FORS_TREES * DIGEST_LEN FEs: one root per FORS tree
-#     # Output:
-#     #   out — DIGEST_LEN FEs: FORS public key hash
-#     pass
+@inline
+def fold_roots(roots, out):
+    # Fold SPX_FORS_TREES (9) FORS tree roots into the FORS public key digest.
+    # Sequential left-fold:
+    #   acc = poseidon(roots[0], roots[1])
+    #   for i in 2..9: acc = poseidon(acc, roots[i])
+    # Costs 8 Poseidon calls.
+    #
+    # Input:
+    #   roots — SPX_FORS_TREES * DIGEST_LEN FEs: one root per FORS tree
+    # Output:
+    #   out — DIGEST_LEN FEs: FORS public key hash
+    states = Array(SPX_FORS_TREES * DIGEST_LEN)
+    for i in unroll(0, SPX_FORS_TREES):
+        if i == 0:
+            copy_8(roots + i * DIGEST_LEN, states + i * DIGEST_LEN)
+        else:
+            poseidon16_compress(states + (i - 1) * DIGEST_LEN, roots + i * DIGEST_LEN, states + i * DIGEST_LEN)
+    copy_8(states + (SPX_FORS_TREES - 1) * DIGEST_LEN, out)
+    return
