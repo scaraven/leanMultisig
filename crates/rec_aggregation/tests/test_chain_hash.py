@@ -16,5 +16,6 @@ def main():
     set_to_8_zeros(local_zero_buff)
 
     iterate_hash(input, n, output, local_zero_buff)
-    assert expected_output == output
+    for i in unroll(0, DIGEST_LEN):
+        assert expected_output[i] == output[i]
     return

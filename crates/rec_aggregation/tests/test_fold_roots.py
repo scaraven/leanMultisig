@@ -13,5 +13,6 @@ def main():
     output = Array(DIGEST_LEN)
 
     fold_roots(roots, output)
-    assert expected_output == output
+    for i in unroll(0, DIGEST_LEN):
+        assert expected_output[i] == output[i]
     return

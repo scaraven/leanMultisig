@@ -353,6 +353,20 @@ def set_to_8_zeros(a):
 
 
 @inline
+def copy_6(a, b):
+    dot_product_ee(a, ONE_EF_PTR, b)
+    b[DIM] = a[DIM]
+    return
+
+
+@inline
+def copy_7(a, b):
+    dot_product_ee(a, ONE_EF_PTR, b)
+    dot_product_ee(a + (7 - DIM), ONE_EF_PTR, b + (7 - DIM))
+    return
+
+
+@inline
 def copy_8(a, b):
     dot_product_ee(a, ONE_EF_PTR, b)
     dot_product_ee(a + (8 - DIM), ONE_EF_PTR, b + (8 - DIM))
