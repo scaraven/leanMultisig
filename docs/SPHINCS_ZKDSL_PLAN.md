@@ -181,7 +181,7 @@ logic inside the loop body.
 current_message = poseidon16_compress(fors_pubkey, [0, 0, 0, 0, 0, 0, 0, 0])
 
 for l in unroll(0, SPX_D):    # 3 layers (compile-time unroll)
-    wots_sig_ptr   = hypertree_sig + l * (RANDOMNESS_LEN + SPX_WOTS_LEN + SPX_TREE_HEIGHT) * DIGEST_LEN
+    wots_sig_ptr   = hypertree_sig + l * RANDOMNESS_LEN + l * (SPX_WOTS_LEN + SPX_TREE_HEIGHT) * DIGEST_LEN
     randomness_ptr = wots_sig_ptr
     chain_tips_ptr = wots_sig_ptr + RANDOMNESS_LEN
     auth_path_ptr  = chain_tips_ptr + SPX_WOTS_LEN * DIGEST_LEN
@@ -335,14 +335,14 @@ for i in parallel_range(0, n_sigs):
 |------------------------------------|--------------------------|
 | Message hash                       | 1                        |
 | WOTS encoding (2 calls × 3 layers) | 6                        |
-| WOTS chain completion (avg ~120/layer × 3) | ~360            |
+| WOTS chain completion (avg ~240/layer × 3) | ~720             |
 | WOTS pubkey fold (31 × 3 layers)   | 93                       |
 | Hypertree Merkle paths (11 × 3)    | 33                       |
 | FORS: hash leaf secrets (9)        | 9                        |
 | FORS: auth paths (15 × 9)          | 135                      |
 | FORS root fold (8)                 | 8                        |
 | Bit decomposition overhead         | ~20 (estimated)          |
-| **Total**                          | **~665**                 |
+| **Total**                          | **~1028**                |
 
 ---
 

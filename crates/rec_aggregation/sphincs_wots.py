@@ -3,7 +3,7 @@ from sphincs_utils import *
 
 
 @inline
-def wots_encode_and_complete(message, layer_index, randomness, chain_tips, wots_pubkey):
+def wots_encode_and_complete(message, layer_index, randomness, chain_tips, wots_pubkey, local_zero_buf):
     # Recover the WOTS+ public key from a message, the layer index, the per-layer
     # randomness, and the signature chain tips.
     #
@@ -65,8 +65,6 @@ def wots_encode_and_complete(message, layer_index, randomness, chain_tips, wots_
         for j in unroll(0, 6):
             assert encoding[i * 6 + j] < SPX_WOTS_W
 
-        assert remaining[i] < 2**7 - 1
-
         partial_sum: Mut = remaining[i] * 2**24
         for j in unroll(0, 6):
             partial_sum += encoding[i * 6 + j] * SPX_WOTS_W**j
@@ -79,9 +77,6 @@ def wots_encode_and_complete(message, layer_index, randomness, chain_tips, wots_
     assert target_sum == TARGET_SUM
 
     # Step 3: complete each chain — hash (CHAIN_LENGTH - 1 - encoding[i]) more times
-    local_zero_buf = Array(DIGEST_LEN)
-    set_to_8_zeros(local_zero_buf)
-
     chain_ends = Array(SPX_WOTS_LEN * DIGEST_LEN)
     for i in unroll(0, SPX_WOTS_LEN):
         n_remaining = (SPX_WOTS_W - 1) - encoding[i]

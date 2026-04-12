@@ -20,9 +20,11 @@ def main():
     expected_wots_pubkey = Array(DIGEST_LEN)
     copy_8(pub_mem + DIGEST_LEN + 1 + RANDOMNESS_LEN + SPX_WOTS_LEN * DIGEST_LEN, expected_wots_pubkey)
 
+    local_zero_buf = Array(DIGEST_LEN)
+    set_to_8_zeros(local_zero_buf)
 
     wots_pubkey = Array(DIGEST_LEN)
-    wots_encode_and_complete(message, layer_index, randomness, chain_tips, wots_pubkey)
+    wots_encode_and_complete(message, layer_index, randomness, chain_tips, wots_pubkey, local_zero_buf)
     for i in unroll(0, DIGEST_LEN):
         assert wots_pubkey[i] == expected_wots_pubkey[i]
     return

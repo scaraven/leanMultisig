@@ -28,6 +28,7 @@ def do_1_merkle_level(bit, state_in, sibling, state_out):
     #   state_out — DIGEST_LEN FEs: poseidon(left, right) where
     #               bit == 0 → left = state_in, right = sibling  (current is left child)
     #               bit == 1 → left = sibling,  right = state_in (current is right child)
+    # Use bit multiplication for now
     if bit == 0:
         poseidon16_compress(state_in, sibling, state_out)
     else:
@@ -75,14 +76,17 @@ def fold_wots_pubkey(chain_pub_keys, out):
     #   chain_pub_keys — SPX_WOTS_LEN * DIGEST_LEN FEs: completed chain-end hashes
     # Output:
     #   out — DIGEST_LEN FEs: folded public key hash
-    states = Array(SPX_WOTS_LEN * DIGEST_LEN)
-    for i in unroll(0, SPX_WOTS_LEN):
-        if i == 0:
-            copy_8(chain_pub_keys, states)
-        else:
-            poseidon16_compress(states + (i - 1) * DIGEST_LEN, chain_pub_keys + i * DIGEST_LEN, states + i * DIGEST_LEN)
-    copy_8(states + (SPX_WOTS_LEN - 1) * DIGEST_LEN, out)
+    copy_8(fold_keys(chain_pub_keys, SPX_WOTS_LEN), out)
     return
+
+
+def fold_keys(keys, n: Const):
+    states = Array((n - 1) * DIGEST_LEN)
+    poseidon16_compress(keys, keys + DIGEST_LEN, states)
+    for i in unroll(1, n - 1):
+        poseidon16_compress(states + (i - 1) * DIGEST_LEN, keys + (i + 1) * DIGEST_LEN, states + i * DIGEST_LEN)
+    
+    return states + (n - 2) * DIGEST_LEN
 
 
 @inline
@@ -97,11 +101,5 @@ def fold_roots(roots, out):
     #   roots — SPX_FORS_TREES * DIGEST_LEN FEs: one root per FORS tree
     # Output:
     #   out — DIGEST_LEN FEs: FORS public key hash
-    states = Array(SPX_FORS_TREES * DIGEST_LEN)
-    for i in unroll(0, SPX_FORS_TREES):
-        if i == 0:
-            copy_8(roots + i * DIGEST_LEN, states + i * DIGEST_LEN)
-        else:
-            poseidon16_compress(states + (i - 1) * DIGEST_LEN, roots + i * DIGEST_LEN, states + i * DIGEST_LEN)
-    copy_8(states + (SPX_FORS_TREES - 1) * DIGEST_LEN, out)
+    copy_8(fold_keys(roots, SPX_FORS_TREES), out)
     return
