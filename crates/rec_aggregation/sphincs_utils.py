@@ -16,7 +16,7 @@ FORS_SIG_SIZE_FE      = SPX_FORS_TREES * (1 + SPX_FORS_HEIGHT) * DIGEST_LEN     
 HYPERTREE_SIG_SIZE_FE = SPX_D * (RANDOMNESS_LEN + SPX_WOTS_LEN * DIGEST_LEN + SPX_TREE_HEIGHT * DIGEST_LEN)  # 1053
 
 @inline
-def do_1_merkle_level(bit, state_in, sibling, state_out):
+def do_4_merkle_level(bit, state_in, sibling, state_out):
     # Advance one binary Merkle level.
     #
     # Inputs:

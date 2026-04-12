@@ -1,7 +1,7 @@
 #![cfg_attr(not(test), allow(unused_crate_dependencies))]
 
 use backend::*;
-use lean_vm::{EF, F};
+use lean_vm::{EF, F, MAX_WHIR_LOG_INV_RATE, MIN_WHIR_LOG_INV_RATE};
 use utils::*;
 
 mod trace_gen;
@@ -44,10 +44,17 @@ pub fn default_whir_config(starting_log_inv_rate: usize) -> WhirConfigBuilder {
     }
 }
 
+pub(crate) fn check_rate(log_inv_rate: usize) -> Result<(), ProofError> {
+    if (MIN_WHIR_LOG_INV_RATE..=MAX_WHIR_LOG_INV_RATE).contains(&log_inv_rate) {
+        Ok(())
+    } else {
+        Err(ProofError::InvalidRate)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use backend::default_koalabear_poseidon2_16;
-    use backend::{PrimeCharacteristicRing, hash_slice};
+    use backend::{PrimeCharacteristicRing, default_koalabear_poseidon1_16, hash_slice};
     use lean_vm::F;
     use rec_aggregation::{get_aggregation_bytecode, init_aggregation_bytecode};
     use utils::poseidon16_compress_pair;
@@ -68,7 +75,7 @@ mod tests {
             prefix_free_name_fe.push(F::ZERO);
         }
         prefix_free_name_fe.push(F::from_u64(len as u64));
-        let comp = default_koalabear_poseidon2_16();
+        let comp = default_koalabear_poseidon1_16();
         let name_hash = hash_slice::<_, _, _, 8, 8>(&comp, &prefix_free_name_fe);
 
         // We incorporate the recursion program hash, containing all the verifier logic, into fiat shamir domain separator

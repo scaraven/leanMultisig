@@ -30,11 +30,13 @@ impl Parse<Expression> for ExpressionParser {
             Rule::log2_ceil_expr => MathOperation::Log2Ceil.parse(pair, ctx),
             Rule::next_multiple_of_expr => MathOperation::NextMultipleOf.parse(pair, ctx),
             Rule::div_ceil_expr => MathOperation::DivCeil.parse(pair, ctx),
+            Rule::div_floor_expr => MathOperation::DivFloor.parse(pair, ctx),
             Rule::saturating_sub_expr => MathOperation::SaturatingSub.parse(pair, ctx),
             Rule::var_or_constant => Ok(Expression::Value(VarOrConstantParser.parse(pair, ctx)?)),
             Rule::array_access_expr => ArrayAccessParser.parse(pair, ctx),
             Rule::len_expr => LenParser.parse(pair, ctx),
             Rule::function_call_expr => FunctionCallExprParser.parse(pair, ctx),
+            Rule::hint_witness_expr => HintWitnessExprParser.parse(pair, ctx),
             Rule::lambda_expr => LambdaParser.parse(pair, ctx),
             Rule::primary => {
                 let inner = next_inner_pair(&mut pair.into_inner(), "primary expression")?;
@@ -91,6 +93,26 @@ impl Parse<Expression> for FunctionCallExprParser {
     }
 }
 
+/// Parser for `hint_witness("name", ptr)`: writes the next witness entry for
+/// `name` into the buffer pointed to by `ptr`. The guest is responsible for
+/// having allocated `ptr` with enough room; the witness's length is trusted
+/// (verified transitively via the hash commitment over the guest's public
+/// input). Used as a statement — no return value.
+pub struct HintWitnessExprParser;
+
+impl Parse<Expression> for HintWitnessExprParser {
+    fn parse(&self, pair: ParsePair<'_>, ctx: &mut ParseContext) -> ParseResult<Expression> {
+        let mut inner = pair.into_inner();
+        let string_lit = next_inner_pair(&mut inner, "hint_witness name literal")?;
+        let text = string_lit.as_str();
+        // Strip the surrounding quotes.
+        let name = text[1..text.len() - 1].to_string();
+        let ptr_pair = next_inner_pair(&mut inner, "hint_witness destination pointer")?;
+        let ptr = Box::new(ExpressionParser.parse(ptr_pair, ctx)?);
+        Ok(Expression::HintWitness { name, ptr })
+    }
+}
+
 /// Parser for lambda expressions: `lambda param: body`
 pub struct LambdaParser;
 
@@ -119,7 +141,10 @@ impl Parse<Expression> for ArrayAccessParser {
             .map(|idx_pair| ExpressionParser.parse(idx_pair, ctx))
             .collect::<Result<Vec<_>, _>>()?;
 
-        Ok(Expression::ArrayAccess { array, index })
+        Ok(Expression::ArrayAccess {
+            array: array.into(),
+            index,
+        })
     }
 }
 

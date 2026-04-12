@@ -4,8 +4,10 @@ from ..utils import *
 
 
 def main():
-    pub_mem = NONRESERVED_PROGRAM_INPUT_START
+    build_preamble_memory()   
     # roots are placed at the start of pub_mem by the Rust test harness
+    pub_mem = Array(1 + DIGEST_LEN + SPX_FORS_HEIGHT * DIGEST_LEN + DIGEST_LEN)
+    hint_witness("pub_mem", pub_mem)
     leaf_index = pub_mem[0]
     leaf_node = Array(DIGEST_LEN)
     copy_8(pub_mem + 1, leaf_node)

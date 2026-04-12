@@ -4,21 +4,22 @@ from ..utils import *
 
 
 def main():
-    pub_mem = NONRESERVED_PROGRAM_INPUT_START
-    # roots are placed at the start of pub_mem by the Rust test harness
+    build_preamble_memory()
     message = Array(DIGEST_LEN)
-    copy_8(pub_mem, message)
+    hint_witness("message", message)
 
-    layer_index = pub_mem[DIGEST_LEN]
+    layer_index_buf = Array(1)
+    hint_witness("layer_index", layer_index_buf)
+    layer_index = layer_index_buf[0]
+
     randomness = Array(RANDOMNESS_LEN)
-    copy_7(pub_mem + DIGEST_LEN + 1, randomness)
+    hint_witness("randomness", randomness)
 
     chain_tips = Array(SPX_WOTS_LEN * DIGEST_LEN)
-    for i in unroll(0, SPX_WOTS_LEN):
-        copy_8(pub_mem + DIGEST_LEN + 1 + RANDOMNESS_LEN + i * DIGEST_LEN, chain_tips + i * DIGEST_LEN)
+    hint_witness("chain_tips", chain_tips)
 
     expected_wots_pubkey = Array(DIGEST_LEN)
-    copy_8(pub_mem + DIGEST_LEN + 1 + RANDOMNESS_LEN + SPX_WOTS_LEN * DIGEST_LEN, expected_wots_pubkey)
+    hint_witness("expected", expected_wots_pubkey)
 
     local_zero_buf = Array(DIGEST_LEN)
     set_to_8_zeros(local_zero_buf)

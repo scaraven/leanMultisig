@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
 
+use backend::pretty_integer;
+
 use crate::execution::Memory;
 use crate::{Table, TableTrace};
-use utils::pretty_integer;
 
 #[derive(Debug, Default, Clone)]
 pub struct ExecutionMetadata {
@@ -12,7 +13,6 @@ pub struct ExecutionMetadata {
     pub n_extension_ops: usize,
     pub bytecode_size: usize,
     pub public_input_size: usize,
-    pub private_input_size: usize,
     pub runtime_memory: usize,
     pub memory_usage_percent: f64,
     pub stdout: String,
@@ -47,16 +47,12 @@ impl ExecutionMetadata {
             "Public input size: {}\n",
             pretty_integer(self.public_input_size)
         ));
-        out.push_str(&format!(
-            "Private input size: {}\n",
-            pretty_integer(self.private_input_size)
-        ));
         out.push_str(&format!("Runtime memory: {}\n", pretty_integer(self.runtime_memory)));
         out.push_str(&format!("Memory usage: {:.1}%\n", self.memory_usage_percent));
         out.push('\n');
         if self.n_poseidons > 0 {
             out.push_str(&format!(
-                "Poseidon2_16 calls: {} (1 poseidon per {} instructions)\n",
+                "Poseidon16 calls: {} (1 poseidon per {} instructions)\n",
                 pretty_integer(self.n_poseidons),
                 self.cycles / self.n_poseidons
             ));

@@ -106,6 +106,14 @@ impl SimpleExpr {
         }
     }
 
+    pub fn as_var(&self) -> Option<&Var> {
+        if let Self::Memory(VarOrConstMallocAccess::Var(name)) = self {
+            Some(name)
+        } else {
+            None
+        }
+    }
+
     pub fn try_vec_as_constant(vec: &[Self]) -> Option<Vec<ConstExpression>> {
         let mut const_elems = Vec::new();
         for expr in vec {
@@ -158,6 +166,7 @@ impl TryFrom<Expression> for ConstExpression {
             Expression::FunctionCall { .. } => Err(()),
             Expression::Len { .. } => Err(()),
             Expression::Lambda { .. } => Err(()),
+            Expression::HintWitness { .. } => Err(()),
         }
     }
 }
@@ -263,7 +272,7 @@ impl Condition {
 pub enum Expression {
     Value(SimpleExpr),
     ArrayAccess {
-        array: Var,
+        array: SimpleExpr,
         index: Vec<Self>, // multi-dimensional array access
     },
     MathExpr(MathOperation, Vec<Self>),
@@ -280,6 +289,12 @@ pub enum Expression {
     Lambda {
         param: Var,
         body: Box<Self>,
+    },
+    /// `hint_witness("name", ptr)` — writes the next witness entry for `name`
+    /// into the buffer pointed to by `ptr`.
+    HintWitness {
+        name: String,
+        ptr: Box<Self>,
     },
 }
 
@@ -306,6 +321,8 @@ pub enum MathOperation {
     SaturatingSub,
     /// Integer division with ceiling
     DivCeil,
+    /// Integer division with floor
+    DivFloor,
 }
 
 impl TryFrom<MathOperation> for Operation {
@@ -333,6 +350,7 @@ impl Display for MathOperation {
             Self::NextMultipleOf => write!(f, "next_multiple_of"),
             Self::SaturatingSub => write!(f, "saturating_sub"),
             Self::DivCeil => write!(f, "div_ceil"),
+            Self::DivFloor => write!(f, "div_floor"),
         }
     }
 }
@@ -352,7 +370,8 @@ impl MathOperation {
             | Self::Mod
             | Self::NextMultipleOf
             | Self::SaturatingSub
-            | Self::DivCeil => 2,
+            | Self::DivCeil
+            | Self::DivFloor => 2,
         }
     }
     pub fn eval(&self, args: &[F]) -> F {
@@ -375,6 +394,7 @@ impl MathOperation {
             }
             Self::SaturatingSub => F::from_usize(args[0].to_usize().saturating_sub(args[1].to_usize())),
             Self::DivCeil => F::from_usize(args[0].to_usize().div_ceil(args[1].to_usize())),
+            Self::DivFloor => F::from_usize(args[0].to_usize() / args[1].to_usize()),
         }
     }
 }
@@ -411,7 +431,7 @@ impl Expression {
         self.eval_with(
             &|value: &SimpleExpr| value.as_constant()?.naive_eval(),
             &|arr, indexes| {
-                let array = const_arrays.get(arr)?;
+                let array = const_arrays.get(arr.as_var()?)?;
                 assert_eq!(indexes.len(), array.depth());
                 array.navigate(&indexes)?.as_scalar()
             },
@@ -421,7 +441,7 @@ impl Expression {
     pub fn eval_with<ValueFn, ArrayFn>(&self, value_fn: &ValueFn, array_fn: &ArrayFn) -> Option<F>
     where
         ValueFn: Fn(&SimpleExpr) -> Option<F>,
-        ArrayFn: Fn(&Var, Vec<F>) -> Option<F>,
+        ArrayFn: Fn(&SimpleExpr, Vec<F>) -> Option<F>,
     {
         match self {
             Self::Value(value) => value_fn(value),
@@ -442,6 +462,7 @@ impl Expression {
             Self::FunctionCall { .. } => None,
             Self::Len { .. } => None,
             Self::Lambda { .. } => None, // Lambdas are only used in match_range, not evaluated directly
+            Self::HintWitness { .. } => None,
         }
     }
 
@@ -453,6 +474,7 @@ impl Expression {
             Self::FunctionCall { args, .. } => args.iter_mut().collect(),
             Self::Len { indices, .. } => indices.iter_mut().collect(),
             Self::Lambda { body, .. } => vec![body.as_mut()],
+            Self::HintWitness { ptr, .. } => vec![ptr.as_mut()],
         }
     }
 
@@ -464,6 +486,7 @@ impl Expression {
             Self::FunctionCall { args, .. } => args.iter().collect(),
             Self::Lambda { body, .. } => vec![body.as_ref()],
             Self::Len { indices, .. } => indices.iter().collect(),
+            Self::HintWitness { ptr, .. } => vec![ptr.as_ref()],
         }
     }
 
@@ -500,7 +523,7 @@ impl Expression {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AssignmentTarget {
     Var { var: Var, is_mutable: bool },
-    ArrayAccess { array: Var, index: Box<Expression> }, // always immutable
+    ArrayAccess { array: SimpleExpr, index: Box<Expression> }, // always immutable
 }
 
 impl Display for AssignmentTarget {
@@ -708,6 +731,9 @@ impl Display for Expression {
             }
             Self::Lambda { param, body } => {
                 write!(f, "lambda {param}: {body}")
+            }
+            Self::HintWitness { name, ptr } => {
+                write!(f, "hint_witness(\"{name}\", {ptr})")
             }
         }
     }
