@@ -3,8 +3,7 @@ use lean_compiler::*;
 use lean_vm::*;
 use rand::{RngExt, SeedableRng, rngs::StdRng};
 use sphincs::{
-    RANDOMNESS_LEN_FE, SPX_FORS_TREES, SPX_WOTS_LEN, SPX_WOTS_W,
-    fold_roots,
+    RANDOMNESS_LEN_FE, SPX_FORS_TREES, SPX_WOTS_LEN, SPX_WOTS_W, fold_roots,
     wots::{WotsPublicKey, find_randomness_for_wots_encoding, iterate_hash, wots_encode},
 };
 
@@ -71,8 +70,7 @@ fn test_sphincs_wots_encode_complete() {
         let layer_index = 0u32;
         let pre_images: [[F; DIGEST_LEN]; SPX_WOTS_LEN] = std::array::from_fn(|_| rng.random());
 
-        let (randomness, encoding, _) =
-            find_randomness_for_wots_encoding(&message, layer_index, &mut rng);
+        let (randomness, encoding, _) = find_randomness_for_wots_encoding(&message, layer_index, &mut rng);
 
         // chain_tips[i] = iterate_hash(preimage[i], encoding[i])  (mid-chain position)
         let chain_tips: [[F; DIGEST_LEN]; SPX_WOTS_LEN] =
@@ -97,8 +95,7 @@ fn test_sphincs_wots_encode_complete() {
         let layer_index = 1u32;
         let pre_images: [[F; DIGEST_LEN]; SPX_WOTS_LEN] = std::array::from_fn(|_| rng.random());
 
-        let (randomness, encoding, _) =
-            find_randomness_for_wots_encoding(&message, layer_index, &mut rng);
+        let (randomness, encoding, _) = find_randomness_for_wots_encoding(&message, layer_index, &mut rng);
 
         let chain_tips: [[F; DIGEST_LEN]; SPX_WOTS_LEN] =
             std::array::from_fn(|i| iterate_hash(pre_images[i], encoding[i] as usize));
@@ -130,8 +127,7 @@ fn test_sphincs_wots_encode_complete() {
         };
 
         // chain_tips and expected_pubkey are irrelevant — circuit fails before reaching them.
-        let chain_tips: [[F; DIGEST_LEN]; SPX_WOTS_LEN] =
-            std::array::from_fn(|_| rng.random());
+        let chain_tips: [[F; DIGEST_LEN]; SPX_WOTS_LEN] = std::array::from_fn(|_| rng.random());
         let fake_pubkey: [F; DIGEST_LEN] = rng.random();
 
         let pi = build_wots_public_input(&message, layer_index, &invalid_randomness, &chain_tips, &fake_pubkey);
@@ -152,18 +148,14 @@ fn test_sphincs_wots_encode_complete() {
         let layer_index = 2u32;
         let pre_images: [[F; DIGEST_LEN]; SPX_WOTS_LEN] = std::array::from_fn(|_| rng.random());
 
-        let (randomness, encoding, _) =
-            find_randomness_for_wots_encoding(&message, layer_index, &mut rng);
+        let (randomness, encoding, _) = find_randomness_for_wots_encoding(&message, layer_index, &mut rng);
 
         // Shift each chain tip one step beyond its correct signing position.
         let chain_tips: [[F; DIGEST_LEN]; SPX_WOTS_LEN] =
             std::array::from_fn(|i| iterate_hash(pre_images[i], encoding[i] as usize + 1));
 
         // Correct expected pubkey (circuit should have produced this with proper chain tips).
-        let correct_pubkey = WotsPublicKey(std::array::from_fn(|i| {
-            iterate_hash(pre_images[i], SPX_WOTS_W - 1)
-        }))
-        .hash();
+        let correct_pubkey = WotsPublicKey(std::array::from_fn(|i| iterate_hash(pre_images[i], SPX_WOTS_W - 1))).hash();
 
         let pi = build_wots_public_input(&message, layer_index, &randomness, &chain_tips, &correct_pubkey);
         assert!(
