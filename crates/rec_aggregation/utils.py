@@ -7,6 +7,28 @@ TWO_ADICITY = 24
 ROOT = 1791270792  # of order 2^TWO_ADICITY
 
 
+@inline
+def build_preamble_memory():
+    zero_vec_w = ZERO_VEC_PTR
+    for i in unroll(0, ZERO_VEC_LEN):
+        zero_vec_w[i] = 0
+
+    sds_w = SAMPLING_DOMAIN_SEPARATOR_PTR
+    sds_w[0] = 1
+    for i in unroll(1, DIGEST_LEN):
+        sds_w[i] = 0
+
+    one_ef_w = ONE_EF_PTR
+    one_ef_w[0] = 1
+    for i in unroll(1, DIM):
+        one_ef_w[i] = 0
+
+    repeated_ones_w = REPEATED_ONES_PTR
+    for i in unroll(0, NUM_REPEATED_ONES):
+        repeated_ones_w[i] = 1
+    return
+
+
 def div_ceil_dynamic(a, b: Const):
     debug_assert(a <= 150)
     res = match_range(a, range(0, 151), lambda i: div_ceil(i, b))
@@ -17,10 +39,10 @@ def div_ceil_dynamic(a, b: Const):
 def powers(alpha, n):
     # alpha: EF
     # n: F
-    assert n < 256
+    assert n < 400
     assert 0 < n
     # 2**log2_ceil(i) is not really necessary but helps reduce byetcode size (traedoff cycles / bytecode size)
-    res = match_range(n, range(1, 256), lambda i: powers_const(alpha, 2**log2_ceil(i)))
+    res = match_range(n, range(1, 400), lambda i: powers_const(alpha, 2**log2_ceil(i)))
     return res
 
 
@@ -139,8 +161,8 @@ def eval_multilinear_coeffs_rev(coeffs, point, n: Const):
 
 
 def dot_product_be_dynamic(a, b, res, n):
-    debug_assert(n <= 256)
-    match_range(n, range(1, 257), lambda i: dot_product_be(a, b, res, i))
+    debug_assert(n < 400)
+    match_range(n, range(1, 400), lambda i: dot_product_be(a, b, res, i))
     return
 
 
@@ -150,8 +172,8 @@ def dot_product_be_const(a, b, res, n: Const):
 
 
 def dot_product_ee_dynamic(a, b, res, n):
-    debug_assert(n <= 256)
-    match_range(n, range(1, 257), lambda i: dot_product_ee(a, b, res, i))
+    debug_assert(n < 400)
+    match_range(n, range(1, 400), lambda i: dot_product_ee(a, b, res, i))
     return
 
 
@@ -172,21 +194,6 @@ def mle_of_01234567_etc(point, n):
         d = mul_extension_ret(point, c)
         res = add_extension_ret(b, d)
         return res
-
-
-def range_check_power_of_2(a, n_bits: Const):
-    # assert a < 2**n_bits
-    debug_assert(n_bits < 30)
-    if n_bits <= 16:
-        assert a < 2**n_bits
-    else:
-        lo: Imu
-        hi: Imu
-        hint_decompose_16(a, lo, hi)
-        assert lo < 2**16
-        assert hi < 2 ** (n_bits - 16)
-        assert a == lo + hi * 2**16
-    return
 
 
 @inline
@@ -360,6 +367,12 @@ def copy_8(a, b):
 
 
 @inline
+def copy_9(a, b):
+    dot_product_ee(a, ONE_EF_PTR, b)
+    dot_product_ee(a + (9 - DIM), ONE_EF_PTR, b + (9 - DIM))
+    return
+
+@inline
 def copy_16(a, b):
     dot_product_ee(a, ONE_EF_PTR, b)
     dot_product_ee(a + 5, ONE_EF_PTR, b + 5)
@@ -451,24 +464,22 @@ def checked_decompose_bits(a):
 def checked_decompose_bits_and_compute_root_pow_const(a, domain_size):
     # Hint 6 nibbles (4 bits each) + 1 top-7-bit value = 7 hints
     nibbles = Array(6)
-    top7 = Array(1)
-    a_ptr = Array(1)
-    a_ptr[0] = a
-    hint_decompose_bits_xmss(nibbles, top7, a_ptr, 1, 4)
+    top7: Imu
+    hint_decompose_bits_merkle_whir(nibbles, top7, a, 4)
 
     for i in unroll(0, 6):
         assert nibbles[i] < 16
 
-    assert top7[0] < 2**7
+    assert top7 < 2**7
 
     partial_sum: Mut = nibbles[0]
     for i in unroll(1, 6):
         partial_sum += nibbles[i] * 16**i
 
-    if top7[0] == 2**7 - 1:
+    if top7 == 2**7 - 1:
         assert partial_sum == 0
 
-    assert partial_sum + top7[0] * 2**24 == a
+    assert partial_sum + top7 * 2**24 == a
 
     # Compute domain_generator^index
     prod: Mut = 1
@@ -522,7 +533,7 @@ def dot_product_ee_ret(a, b, n):
 
 @inline
 def sum_continuous_ef(slice_ef, len):
-    debug_assert(len <= NUM_REPEATED_ONES_IN_RESERVED_MEMORY)
+    debug_assert(len <= NUM_REPEATED_ONES)
     res = Array(DIM)
     dot_product_be_dynamic(REPEATED_ONES_PTR, slice_ef, res, len)
     return res

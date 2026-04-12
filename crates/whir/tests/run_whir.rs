@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use fiat_shamir::{ProverState, VerifierState};
 use field::{Field, TwoAdicField};
-use koala_bear::{KoalaBear, QuinticExtensionFieldKB, default_koalabear_poseidon2_16};
+use koala_bear::{KoalaBear, QuinticExtensionFieldKB, default_koalabear_poseidon1_16};
 use mt_whir::*;
 use poly::*;
 use rand::{RngExt, SeedableRng, rngs::StdRng};
@@ -30,7 +30,7 @@ fn test_run_whir() {
             .with(ForestLayer::default())
             .try_init();
     }
-    let poseidon16 = default_koalabear_poseidon2_16();
+    let poseidon16 = default_koalabear_poseidon1_16();
 
     let num_variables = std::env::var("WHIR_NUM_VARIABLES")
         .ok()
@@ -133,4 +133,36 @@ fn test_run_whir() {
         opening_time_single.as_millis(),
         proof_size_single / 1024.0
     );
+}
+
+#[test]
+fn display_whir_nb_queries() {
+    let first_folding_factor = 7;
+    for n_vars in 20..31 {
+        for log_inv_rate in 1..5 {
+            if n_vars + log_inv_rate - first_folding_factor > F::TWO_ADICITY {
+                continue;
+            }
+            let params = WhirConfigBuilder {
+                security_level: 123,
+                max_num_variables_to_send_coeffs: 9,
+                pow_bits: 18,
+                folding_factor: FoldingFactor::new(first_folding_factor, 4),
+                soundness_type: SecurityAssumption::JohnsonBound,
+                starting_log_inv_rate: log_inv_rate,
+                rs_domain_initial_reduction_factor: 5,
+            };
+            let params = WhirConfig::<EF>::new(&params, n_vars);
+            println!(
+                "n_vars: {}, log_inv_rate: {}, num_queries: {:?}",
+                n_vars,
+                log_inv_rate,
+                params
+                    .round_parameters
+                    .iter()
+                    .map(|r| r.num_queries)
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
 }

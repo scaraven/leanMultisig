@@ -67,16 +67,6 @@ class DynArray:
         self._data.pop()
 
 
-# Built-in constants
-ZERO_VEC_PTR = 0
-SAMPLING_DOMAIN_SEPARATOR_PTR = 16
-ONE_EF_PTR = 24
-REPEATED_ONES_PTR = 29
-NUM_REPEATED_ONES_IN_RESERVED_MEMORY = 16
-EQ_MLE_COEFFS_PTR = 45
-NONRESERVED_PROGRAM_INPUT_START = 50
-
-
 def poseidon16_compress(left, right, output, mode):
     _ = left, right, output, mode
 
@@ -108,11 +98,6 @@ def poly_eq_ee(a, b, result, length=None):
 def hint_decompose_bits(value, bits, n_bits, endian):
     _ = value, bits, n_bits, endian
 
-
-def hint_decompose_16(a, lo, hi):
-    _ = a, lo, hi
-
-
 def hint_less_than(a, b, result_ptr):
     _ = a, b, result_ptr
 
@@ -125,6 +110,8 @@ def log2_ceil(x: int) -> int:
 def div_ceil(a: int, b: int) -> int:
     return (a + b - 1) // b
 
+def div_floor(a: int, b: int) -> int:
+    return a // b
 
 def next_multiple_of(x: int, n: int) -> int:
     return x + (n - x % n) % n
@@ -156,11 +143,11 @@ def match_range(value: int, *args):
     raise AssertionError(f"Value {value} not in any range")
 
 
-def hint_private_input_start(priv_start):
-    _ = priv_start
-
-
 def hint_decompose_bits_xmss(*args):
+    _ = args
+
+
+def hint_decompose_bits_merkle_whir(*args):
     _ = args
 
 
@@ -168,10 +155,6 @@ def hint_log2_ceil(n):
     return log2_ceil(n)
 
 
-def hint_xmss(buff):
-    _ = buff
-
-
-def hint_merkle(buff, n):
-    _ = buff
-    _ = n
+def hint_witness(name, destination):
+    """Write the next witness entry for `name` into `destination`."""
+    _ = (name, destination)
