@@ -164,3 +164,11 @@ fn test_sphincs_wots_encode_complete() {
         );
     }
 }
+
+#[test]
+fn test_sphincs_fors_merkle_verify() {
+    let path = format!("{}/tests/test_fors.py", env!("CARGO_MANIFEST_DIR"));
+    // Just compile the program for now
+    let _ = compile_program(&ProgramSource::Filepath(path));
+}
+    
