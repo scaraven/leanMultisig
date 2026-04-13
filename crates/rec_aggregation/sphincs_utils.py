@@ -17,8 +17,7 @@ HYPERTREE_SIG_SIZE_FE = SPX_D * (RANDOMNESS_LEN + SPX_WOTS_LEN * DIGEST_LEN + SP
 
 MERKLE_LEVEL_STEP = 3 # number of Merkle levels processed by do_3_merkle_level; must divide SPX_FORS_HEIGHT
 
-@inline
-def do_3_merkle_level(bits, state_in, sibling, state_out):
+def do_3_merkle_level(bits, state_in, sibling):
     # Advance 5 levels of the Merkle tree.
     #
     # Inputs:
@@ -34,7 +33,8 @@ def do_3_merkle_level(bits, state_in, sibling, state_out):
     b0 = bits[0]
     b1 = bits[1]
     b2 = bits[2]
-    
+
+    state_out = Array(DIGEST_LEN)
     intermediate_states = Array((MERKLE_LEVEL_STEP - 1) * DIGEST_LEN)
     if b0 == 0:
         poseidon16_compress(state_in, sibling, intermediate_states)
@@ -50,7 +50,8 @@ def do_3_merkle_level(bits, state_in, sibling, state_out):
         poseidon16_compress(intermediate_states + DIGEST_LEN, sibling + 2 * DIGEST_LEN, state_out)
     else:
         poseidon16_compress(sibling + 2 * DIGEST_LEN, intermediate_states + DIGEST_LEN, state_out)
-    return
+        
+    return state_out
 
 def _iterate_hash_const(input, k: Const, output, local_zero_buf):
     # Inner compile-time-constant implementation of iterate_hash.

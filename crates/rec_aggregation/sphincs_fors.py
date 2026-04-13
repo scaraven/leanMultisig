@@ -29,28 +29,40 @@ def fors_merkle_verify(leaf_index, leaf_node, auth_path, out):
     hint_decompose_bits(leaf_index, bits, SPX_FORS_HEIGHT, LITTLE_ENDIAN)
 
     for i in unroll(0, SPX_FORS_HEIGHT / MERKLE_LEVEL_STEP):
-        do_3_merkle_level(bits + i * MERKLE_LEVEL_STEP, leaf_node_arr + i * DIGEST_LEN, 
-                          auth_path + MERKLE_LEVEL_STEP * i * DIGEST_LEN, leaf_node_arr + (i + 1) * DIGEST_LEN)        
+        copy_8(do_3_merkle_level(bits + i * MERKLE_LEVEL_STEP, leaf_node_arr + i * DIGEST_LEN, 
+                          auth_path + MERKLE_LEVEL_STEP * i * DIGEST_LEN), leaf_node_arr + (i + 1) * DIGEST_LEN)        
     copy_8(leaf_node_arr + SPX_FORS_HEIGHT / MERKLE_LEVEL_STEP * DIGEST_LEN, out)
     return
 
 
-# @inline
-# def fors_verify(fors_sig, fors_indices, fors_pubkey):
-#     # Verify all SPX_FORS_TREES (9) FORS trees and fold their roots into the FORS public key.
-#     #
-#     # For each tree t in unroll(0, SPX_FORS_TREES):
-#     #   - Read leaf_secret at fors_sig + t * (1 + SPX_FORS_HEIGHT) * DIGEST_LEN.
-#     #   - Hash leaf_secret to level-0 node: leaf_node = poseidon(leaf_secret, zero_buf).
-#     #   - Run fors_merkle_verify(fors_indices[t], leaf_node, auth_path, roots[t]).
-#     # Then fold the 9 roots into fors_pubkey via fold_roots.
-#     # Costs 9 (leaf hashes) + 9*15 (auth path) + 8 (fold) = 152 Poseidon calls.
-#     #
-#     # Inputs:
-#     #   fors_sig     — FORS_SIG_SIZE_FE (1152) FEs loaded via hint_sphincs_fors;
-#     #                  layout: for t in 0..9: [leaf_secret(8) | auth_path(120)]
-#     #   fors_indices — SPX_FORS_TREES FEs, each < 2^SPX_FORS_HEIGHT;
-#     #                  produced by decompose_message_digest
-#     # Output:
-#     #   fors_pubkey  — DIGEST_LEN FEs: FORS public key (folded root hash)
-#     pass
+@inline
+def fors_verify(fors_indices, fors_pubkey):
+    # Verify all SPX_FORS_TREES (9) FORS trees and fold their roots into the FORS public key.
+    #
+    # For each tree t in unroll(0, SPX_FORS_TREES):
+    #   - Read leaf_secret at fors_sig + t * (1 + SPX_FORS_HEIGHT) * DIGEST_LEN.
+    #   - Run fors_merkle_verify(fors_indices[t], leaf_node, auth_path, roots[t]).
+    # Then fold the 9 roots into fors_pubkey via fold_roots.
+    # Costs 9 (leaf hashes) + 9*15 (auth path) + 8 (fold) = 152 Poseidon calls.
+    #
+    # Inputs:
+    #   fors_indices — SPX_FORS_TREES FEs, each < 2^SPX_FORS_HEIGHT;
+    #                  produced by decompose_message_digest
+    # Hints:
+    #   fors_sig     — FORS_SIG_SIZE_FE FEs: introduced via hint_witness
+    # Output:
+    #   fors_pubkey  — DIGEST_LEN FEs: FORS public key (folded root hash)
+    fors_sig = Array(FORS_SIG_SIZE_FE)
+    hint_witness("fors_sig", fors_sig)
+
+    roots = Array(SPX_FORS_TREES * DIGEST_LEN)
+    for t in unroll(0, SPX_FORS_TREES):
+        leaf_node = Array(DIGEST_LEN)
+        copy_8(fors_sig + t * (1 + SPX_FORS_HEIGHT) * DIGEST_LEN, leaf_node)
+
+        auth_path = fors_sig + t * (1 + SPX_FORS_HEIGHT) * DIGEST_LEN + DIGEST_LEN
+        fors_merkle_verify(fors_indices[t], leaf_node, auth_path, roots + t * DIGEST_LEN)
+
+    # Fold the 9 roots into the FORS public key.
+    fold_roots(roots, fors_pubkey)
+    return

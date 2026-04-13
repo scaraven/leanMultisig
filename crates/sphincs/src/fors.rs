@@ -184,6 +184,49 @@ impl ForsSecretKey {
     }
 }
 
+/// Size of a flat FORS signature in field elements.
+/// Layout: for each of SPX_FORS_TREES trees: [leaf_secret (DIGEST_SIZE FEs) | auth_path (SPX_FORS_HEIGHT * DIGEST_SIZE FEs)]
+pub const FORS_SIG_SIZE_FE: usize = SPX_FORS_TREES * (1 + SPX_FORS_HEIGHT) * DIGEST_SIZE;
+
+/// Flatten a `ForsSignature` into a `Vec<F>` matching the zkDSL hint layout.
+///
+/// Layout (per tree t):
+///   offset t*(1+SPX_FORS_HEIGHT)*DIGEST_SIZE       : leaf_secret  (DIGEST_SIZE FEs)
+///   offset t*(1+SPX_FORS_HEIGHT)*DIGEST_SIZE + DIGEST_SIZE : auth_path[0..SPX_FORS_HEIGHT] (each DIGEST_SIZE FEs)
+pub fn fors_sig_to_flat(sig: &ForsSignature) -> Vec<F> {
+    let mut out = Vec::with_capacity(FORS_SIG_SIZE_FE);
+    for tree in &sig.trees {
+        out.extend_from_slice(&tree.leaf_secret);
+        for node in &tree.auth_path {
+            out.extend_from_slice(node);
+        }
+    }
+    debug_assert_eq!(out.len(), FORS_SIG_SIZE_FE);
+    out
+}
+
+/// Reconstruct a `ForsSignature` from a flat `Vec<F>` produced by `fors_sig_to_flat`.
+///
+/// Returns `None` if `flat` does not have exactly `FORS_SIG_SIZE_FE` elements.
+pub fn fors_sig_from_flat(flat: &[F]) -> Option<ForsSignature> {
+    if flat.len() != FORS_SIG_SIZE_FE {
+        return None;
+    }
+    let stride = (1 + SPX_FORS_HEIGHT) * DIGEST_SIZE;
+    let trees = std::array::from_fn(|t| {
+        let base = t * stride;
+        let leaf_secret: Digest = flat[base..base + DIGEST_SIZE].try_into().unwrap();
+        let auth_path = (0..SPX_FORS_HEIGHT)
+            .map(|i| {
+                let off = base + DIGEST_SIZE + i * DIGEST_SIZE;
+                flat[off..off + DIGEST_SIZE].try_into().unwrap()
+            })
+            .collect();
+        ForsTreeSig { leaf_secret, auth_path }
+    });
+    Some(ForsSignature { trees })
+}
+
 /// Extract the k=9 FORS leaf indices from the mhash bytes.
 /// mhash is 17 bytes = 136 bits; split into 9 consecutive 15-bit chunks.
 pub fn extract_fors_indices(mhash: &[u8; SPX_FORS_MSG_BYTES]) -> [usize; SPX_FORS_TREES] {
@@ -208,6 +251,9 @@ pub fn extract_fors_indices(mhash: &[u8; SPX_FORS_MSG_BYTES]) -> [usize; SPX_FOR
 
 #[cfg(test)]
 mod tests {
+    use backend::PrimeCharacteristicRing;
+    use rand::{RngExt, SeedableRng, rngs::StdRng};
+
     use super::*;
 
     #[test]
@@ -239,5 +285,77 @@ mod tests {
         let recovered_pk = fors_verify(&sig, &indices).expect("valid signature");
 
         assert_eq!(pk, recovered_pk);
+    }
+
+    #[test]
+    fn test_flat_layout_total_length() {
+        let mut rng = StdRng::seed_from_u64(42);
+        let sig = ForsSignature {
+            trees: std::array::from_fn(|_| ForsTreeSig {
+                leaf_secret: rng.random(),
+                auth_path: (0..SPX_FORS_HEIGHT).map(|_| rng.random()).collect(),
+            }),
+        };
+        let flat = fors_sig_to_flat(&sig);
+        assert_eq!(flat.len(), FORS_SIG_SIZE_FE);
+        assert_eq!(FORS_SIG_SIZE_FE, 1152);
+    }
+
+    #[test]
+    fn test_flat_layout_positions() {
+        // Build a signature where each tree uses recognisable values so we can
+        // assert exact offsets in the flat vector.
+        let stride = (1 + SPX_FORS_HEIGHT) * DIGEST_SIZE;
+        let trees_data: Vec<(Digest, Vec<Digest>)> = (0..SPX_FORS_TREES)
+            .map(|t| {
+                let leaf: Digest = std::array::from_fn(|i| F::from_usize(t * 100 + i));
+                let auth: Vec<Digest> = (0..SPX_FORS_HEIGHT)
+                    .map(|level| std::array::from_fn(|i| F::from_usize(t * 1000 + level * 10 + i)))
+                    .collect();
+                (leaf, auth)
+            })
+            .collect();
+
+        let sig = ForsSignature {
+            trees: std::array::from_fn(|t| ForsTreeSig {
+                leaf_secret: trees_data[t].0,
+                auth_path: trees_data[t].1.clone(),
+            }),
+        };
+
+        let flat = fors_sig_to_flat(&sig);
+
+        for t in 0..SPX_FORS_TREES {
+            let base = t * stride;
+            // leaf_secret occupies [base, base + DIGEST_SIZE)
+            assert_eq!(
+                &flat[base..base + DIGEST_SIZE],
+                &trees_data[t].0,
+                "tree {t} leaf_secret mismatch"
+            );
+            // each auth_path node at base + DIGEST_SIZE + level * DIGEST_SIZE
+            for level in 0..SPX_FORS_HEIGHT {
+                let off = base + DIGEST_SIZE + level * DIGEST_SIZE;
+                assert_eq!(
+                    &flat[off..off + DIGEST_SIZE],
+                    &trees_data[t].1[level],
+                    "tree {t} auth_path[{level}] mismatch"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_flat_round_trip() {
+        let mut rng = StdRng::seed_from_u64(99);
+        let sig = ForsSignature {
+            trees: std::array::from_fn(|_| ForsTreeSig {
+                leaf_secret: rng.random(),
+                auth_path: (0..SPX_FORS_HEIGHT).map(|_| rng.random()).collect(),
+            }),
+        };
+        let flat = fors_sig_to_flat(&sig);
+        let recovered = fors_sig_from_flat(&flat).expect("round-trip should succeed");
+        assert_eq!(sig, recovered);
     }
 }

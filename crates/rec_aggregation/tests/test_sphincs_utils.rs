@@ -5,7 +5,7 @@ use rand::{RngExt, SeedableRng, rngs::StdRng};
 use rec_aggregation::PREAMBLE_MEMORY_LEN;
 use sphincs::{
     RANDOMNESS_LEN_FE, SPX_FORS_HEIGHT, SPX_FORS_TREES, SPX_WOTS_LEN, SPX_WOTS_W, fold_roots, fors_key_gen,
-    fors_sign_single_tree,
+    fors_sig_to_flat, fors_sign, fors_sign_single_tree,
     wots::{WotsPublicKey, find_randomness_for_wots_encoding, iterate_hash, wots_encode},
 };
 use std::collections::HashMap;
@@ -203,7 +203,7 @@ fn test_sphincs_wots_encode_complete() {
 
 #[test]
 fn test_sphincs_fors_merkle_verify() {
-    let path = format!("{}/tests/test_fors.py", env!("CARGO_MANIFEST_DIR"));
+    let path = format!("{}/tests/test_fors_tree.py", env!("CARGO_MANIFEST_DIR"));
     // Just compile the program for now
     let bytecode = compile_program(&ProgramSource::Filepath(path));
 
@@ -231,4 +231,58 @@ fn test_sphincs_fors_merkle_verify() {
         hints,
     };
     execute_bytecode(&bytecode, &vec![F::from_usize(0); DIGEST_LEN], &witness, false);
+}
+
+#[test]
+fn test_sphincs_fors_verify() {
+    let path = format!("{}/tests/test_fors.py", env!("CARGO_MANIFEST_DIR"));
+    // Just compile the program for now
+    let bytecode = compile_program(&ProgramSource::Filepath(path));
+
+    let mut rng = StdRng::seed_from_u64(0);
+    let seed: [u8; 20] = rng.random();
+
+    let (fors_sk, fors_pk) = fors_key_gen(seed);
+    let leaf_indices: [usize; SPX_FORS_TREES] = std::array::from_fn(|_| rng.random_range(..(1 << SPX_FORS_HEIGHT)));
+    let root = fors_pk.0;
+
+    let sig = fors_sign(&fors_sk, &leaf_indices);
+    let sig_flat = fors_sig_to_flat(&sig);
+
+    let hints = HashMap::from([
+        (
+            "leaf_index".to_string(),
+            vec![leaf_indices.iter().map(|&idx| F::from_usize(idx)).collect()],
+        ),
+        ("expected_root".to_string(), vec![root.to_vec()]),
+        ("fors_sig".to_string(), vec![sig_flat.to_vec()]),
+    ]);
+
+    let witness = ExecutionWitness {
+        preamble_memory_len: PREAMBLE_MEMORY_LEN,
+        hints,
+    };
+
+    execute_bytecode(&bytecode, &vec![F::from_usize(0); DIGEST_LEN], &witness, false);
+
+    // Create new wrong root
+    let root: [F; DIGEST_LEN] = rng.random();
+    let hints_wrong = HashMap::from([
+        (
+            "leaf_index".to_string(),
+            vec![leaf_indices.iter().map(|&idx| F::from_usize(idx)).collect()],
+        ),
+        ("expected_root".to_string(), vec![root.to_vec()]),
+        ("fors_sig".to_string(), vec![sig_flat.to_vec()]),
+    ]);
+
+    let witness_wrong = ExecutionWitness {
+        preamble_memory_len: PREAMBLE_MEMORY_LEN,
+        hints: hints_wrong,
+    };
+
+    assert!(
+        try_execute_bytecode(&bytecode, &vec![F::from_usize(0); DIGEST_LEN], &witness_wrong, false).is_err(),
+        "should fail: wrong expected root"
+    );
 }
