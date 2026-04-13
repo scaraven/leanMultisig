@@ -155,8 +155,8 @@ pub fn fors_verify(sig: &ForsSignature, indices: &[usize; SPX_FORS_TREES]) -> Re
             return Err(ForsVerifyError::OutofBoundsLeafIndex);
         }
 
-        // Recompute the level-0 node from the revealed secret.
-        let mut current = tree_sig.leaf_secret.clone();
+        // Create a mutable copy
+        let mut current = tree_sig.leaf_secret;
 
         // Walk up the tree using the auth path.
         for (level, sibling) in tree_sig.auth_path.iter().enumerate() {

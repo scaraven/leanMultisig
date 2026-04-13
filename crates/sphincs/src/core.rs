@@ -61,16 +61,16 @@ impl SphincsSecretKey {
     }
 }
 
-impl Into<ForsSecretKey> for &SphincsSecretKey {
-    fn into(self) -> ForsSecretKey {
-        let fors_sk = fors::fors_key_gen(self.seed);
+impl From<&SphincsSecretKey> for ForsSecretKey {
+    fn from(val: &SphincsSecretKey) -> Self {
+        let fors_sk = fors::fors_key_gen(val.seed);
         fors_sk.0
     }
 }
 
-impl Into<HypertreeSecretKey> for &SphincsSecretKey {
-    fn into(self) -> HypertreeSecretKey {
-        hypertree::HypertreeSecretKey::new(self.seed)
+impl From<&SphincsSecretKey> for HypertreeSecretKey {
+    fn from(val: &SphincsSecretKey) -> Self {
+        hypertree::HypertreeSecretKey::new(val.seed)
     }
 }
 
