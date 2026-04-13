@@ -18,8 +18,6 @@ use crate::*;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ForsSecretKey {
     seed: [u8; 20],
-    /// Materialised leaf secrets: [tree][leaf]
-    leaf_secrets: Vec<Vec<Digest>>,
     /// Materialised tree nodes: [tree][level][node]
     /// level 0 = leaf hashes, level SPX_FORS_HEIGHT = root
     nodes: Vec<Vec<Vec<Digest>>>,
@@ -70,17 +68,15 @@ fn hash_leaf(secret: &Digest) -> Digest {
     poseidon16_compress_pair(secret, &Default::default())
 }
 
+/// Generate the full FORS keypair, materialising all leaf secrets and tree nodes.
 pub fn fors_key_gen(seed: [u8; 20]) -> (ForsSecretKey, ForsPublicKey) {
     let num_leaves = 1usize << SPX_FORS_HEIGHT;
 
-    let mut all_secrets = Vec::with_capacity(SPX_FORS_TREES);
     let mut all_nodes: Vec<Vec<Vec<Digest>>> = Vec::with_capacity(SPX_FORS_TREES);
 
     for t in 0..SPX_FORS_TREES {
-        let secrets: Vec<Digest> = (0..num_leaves).map(|l| derive_leaf_secret(&seed, t, l)).collect();
-
         // Level 0: hash of each secret value.
-        let leaf_hashes: Vec<Digest> = secrets.iter().map(hash_leaf).collect();
+        let leaf_hashes: Vec<Digest> = (0..num_leaves).map(|l| derive_leaf_secret(&seed, t, l)).collect();
 
         // Build inner levels bottom-up.
         let mut levels = vec![leaf_hashes];
@@ -93,14 +89,12 @@ pub fn fors_key_gen(seed: [u8; 20]) -> (ForsSecretKey, ForsPublicKey) {
             levels.push(next);
         }
 
-        all_secrets.push(secrets);
         all_nodes.push(levels);
     }
 
     let pk = fors_public_key_from_nodes(&all_nodes);
     let sk = ForsSecretKey {
         seed,
-        leaf_secrets: all_secrets,
         nodes: all_nodes,
         root: pk.0,
     };
@@ -120,21 +114,25 @@ pub fn fold_roots(roots: &[Digest]) -> Digest {
     roots[2..].iter().fold(init, |acc, r| poseidon16_compress_pair(&acc, r))
 }
 
+/// Sign a single tree in the FORS forest, revealing the leaf secret and auth path for the selected leaf.
+pub fn fors_sign_single_tree(sk: &ForsSecretKey, tree_index: usize, leaf_index: usize) -> ForsTreeSig {
+    assert!(tree_index < SPX_FORS_TREES, "Tree index out of bounds");
+    assert!(leaf_index < (1 << SPX_FORS_HEIGHT), "Leaf index out of bounds");
+
+    let leaf_secret = sk.nodes[tree_index][0][leaf_index];
+
+    let auth_path = (0..SPX_FORS_HEIGHT)
+        .map(|level| {
+            let sibling_idx = (leaf_index >> level) ^ 1;
+            sk.nodes[tree_index][level][sibling_idx]
+        })
+        .collect();
+
+    ForsTreeSig { leaf_secret, auth_path }
+}
+
 pub fn fors_sign(sk: &ForsSecretKey, indices: &[usize; SPX_FORS_TREES]) -> ForsSignature {
-    let trees = std::array::from_fn(|t| {
-        assert!(indices[t] < (1 << SPX_FORS_HEIGHT), "Leaf index out of bounds");
-        let leaf_idx = indices[t];
-        let leaf_secret = sk.leaf_secrets[t][leaf_idx];
-
-        let auth_path = (0..SPX_FORS_HEIGHT)
-            .map(|level| {
-                let sibling_idx = (leaf_idx >> level) ^ 1;
-                sk.nodes[t][level][sibling_idx]
-            })
-            .collect();
-
-        ForsTreeSig { leaf_secret, auth_path }
-    });
+    let trees = std::array::from_fn(|t| fors_sign_single_tree(sk, t, indices[t]));
 
     ForsSignature { trees }
 }
@@ -158,7 +156,7 @@ pub fn fors_verify(sig: &ForsSignature, indices: &[usize; SPX_FORS_TREES]) -> Re
         }
 
         // Recompute the level-0 node from the revealed secret.
-        let mut current = hash_leaf(&tree_sig.leaf_secret);
+        let mut current = tree_sig.leaf_secret.clone();
 
         // Walk up the tree using the auth path.
         for (level, sibling) in tree_sig.auth_path.iter().enumerate() {
@@ -179,6 +177,10 @@ pub fn fors_verify(sig: &ForsSignature, indices: &[usize; SPX_FORS_TREES]) -> Re
 impl ForsSecretKey {
     pub fn public_key(&self) -> ForsPublicKey {
         ForsPublicKey(self.root)
+    }
+
+    pub fn tree_pubkey(&self, tree_index: usize) -> Digest {
+        self.nodes[tree_index][SPX_FORS_HEIGHT][0]
     }
 }
 

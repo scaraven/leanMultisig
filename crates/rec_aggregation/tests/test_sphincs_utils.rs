@@ -3,11 +3,12 @@ use lean_compiler::*;
 use lean_vm::*;
 use rand::{RngExt, SeedableRng, rngs::StdRng};
 use rec_aggregation::PREAMBLE_MEMORY_LEN;
-use std::collections::HashMap;
 use sphincs::{
-    RANDOMNESS_LEN_FE, SPX_FORS_TREES, SPX_WOTS_LEN, SPX_WOTS_W, fold_roots,
+    RANDOMNESS_LEN_FE, SPX_FORS_HEIGHT, SPX_FORS_TREES, SPX_WOTS_LEN, SPX_WOTS_W, fold_roots, fors_key_gen,
+    fors_sign_single_tree,
     wots::{WotsPublicKey, find_randomness_for_wots_encoding, iterate_hash, wots_encode},
 };
+use std::collections::HashMap;
 
 #[test]
 fn test_fold_roots_sphincs() {
@@ -22,7 +23,10 @@ fn test_fold_roots_sphincs() {
         ("roots".to_string(), vec![roots_flat]),
         ("expected".to_string(), vec![hash.to_vec()]),
     ]);
-    let witness = ExecutionWitness { preamble_memory_len: PREAMBLE_MEMORY_LEN, hints };
+    let witness = ExecutionWitness {
+        preamble_memory_len: PREAMBLE_MEMORY_LEN,
+        hints,
+    };
     execute_bytecode(&bytecode, &vec![F::from_usize(0); DIGEST_LEN], &witness, false);
 }
 
@@ -40,7 +44,10 @@ fn test_chain_hash_sphincs() {
             ("input".to_string(), vec![data]),
             ("expected".to_string(), vec![hash.to_vec()]),
         ]);
-        let witness = ExecutionWitness { preamble_memory_len: PREAMBLE_MEMORY_LEN, hints };
+        let witness = ExecutionWitness {
+            preamble_memory_len: PREAMBLE_MEMORY_LEN,
+            hints,
+        };
         execute_bytecode(&bytecode, &vec![F::from_usize(0); DIGEST_LEN], &witness, false);
     }
 }
@@ -56,9 +63,15 @@ fn build_wots_hints(
 ) -> HashMap<String, Vec<Vec<F>>> {
     HashMap::from([
         ("message".to_string(), vec![message.to_vec()]),
-        ("layer_index".to_string(), vec![vec![F::from_usize(layer_index as usize)]]),
+        (
+            "layer_index".to_string(),
+            vec![vec![F::from_usize(layer_index as usize)]],
+        ),
         ("randomness".to_string(), vec![randomness.to_vec()]),
-        ("chain_tips".to_string(), vec![chain_tips.iter().flatten().copied().collect()]),
+        (
+            "chain_tips".to_string(),
+            vec![chain_tips.iter().flatten().copied().collect()],
+        ),
         ("expected".to_string(), vec![expected_pubkey.to_vec()]),
     ])
 }
@@ -91,7 +104,10 @@ fn test_sphincs_wots_encode_complete() {
         .hash();
 
         let hints = build_wots_hints(&message, layer_index, &randomness, &chain_tips, &expected_pubkey);
-        let witness = ExecutionWitness { preamble_memory_len: PREAMBLE_MEMORY_LEN, hints };
+        let witness = ExecutionWitness {
+            preamble_memory_len: PREAMBLE_MEMORY_LEN,
+            hints,
+        };
         execute_bytecode(&bytecode, &vec![F::from_usize(0); DIGEST_LEN], &witness, false);
     }
 
@@ -112,7 +128,10 @@ fn test_sphincs_wots_encode_complete() {
         let wrong_pubkey: [F; DIGEST_LEN] = rng.random();
 
         let hints = build_wots_hints(&message, layer_index, &randomness, &chain_tips, &wrong_pubkey);
-        let witness = ExecutionWitness { preamble_memory_len: PREAMBLE_MEMORY_LEN, hints };
+        let witness = ExecutionWitness {
+            preamble_memory_len: PREAMBLE_MEMORY_LEN,
+            hints,
+        };
         assert!(
             try_execute_bytecode(&bytecode, &vec![F::from_usize(0); DIGEST_LEN], &witness, false).is_err(),
             "should fail: wrong expected pubkey"
@@ -140,7 +159,10 @@ fn test_sphincs_wots_encode_complete() {
         let fake_pubkey: [F; DIGEST_LEN] = rng.random();
 
         let hints = build_wots_hints(&message, layer_index, &invalid_randomness, &chain_tips, &fake_pubkey);
-        let witness = ExecutionWitness { preamble_memory_len: PREAMBLE_MEMORY_LEN, hints };
+        let witness = ExecutionWitness {
+            preamble_memory_len: PREAMBLE_MEMORY_LEN,
+            hints,
+        };
         assert!(
             try_execute_bytecode(&bytecode, &vec![F::from_usize(0); DIGEST_LEN], &witness, false).is_err(),
             "should fail: invalid encoding (sum != TARGET_SUM or -1 FE)"
@@ -168,7 +190,10 @@ fn test_sphincs_wots_encode_complete() {
         let correct_pubkey = WotsPublicKey(std::array::from_fn(|i| iterate_hash(pre_images[i], SPX_WOTS_W - 1))).hash();
 
         let hints = build_wots_hints(&message, layer_index, &randomness, &chain_tips, &correct_pubkey);
-        let witness = ExecutionWitness { preamble_memory_len: PREAMBLE_MEMORY_LEN, hints };
+        let witness = ExecutionWitness {
+            preamble_memory_len: PREAMBLE_MEMORY_LEN,
+            hints,
+        };
         assert!(
             try_execute_bytecode(&bytecode, &vec![F::from_usize(0); DIGEST_LEN], &witness, false).is_err(),
             "should fail: chain tips shifted one position too far"
@@ -180,6 +205,30 @@ fn test_sphincs_wots_encode_complete() {
 fn test_sphincs_fors_merkle_verify() {
     let path = format!("{}/tests/test_fors.py", env!("CARGO_MANIFEST_DIR"));
     // Just compile the program for now
-    let _ = compile_program(&ProgramSource::Filepath(path));
+    let bytecode = compile_program(&ProgramSource::Filepath(path));
+
+    let mut rng = StdRng::seed_from_u64(0);
+    let seed: [u8; 20] = rng.random();
+
+    let (fors_sk, _) = fors_key_gen(seed);
+    let leaf_index: usize = rng.random_range(..(1 << SPX_FORS_HEIGHT));
+    let tree: usize = rng.random_range(..SPX_FORS_TREES);
+    let root = fors_sk.tree_pubkey(tree);
+
+    let sig = fors_sign_single_tree(&fors_sk, tree, leaf_index);
+
+    let hints = HashMap::from([
+        ("leaf_index".to_string(), vec![vec![F::from_usize(leaf_index)]]),
+        ("leaf_node".to_string(), vec![sig.leaf_secret.to_vec()]),
+        (
+            "auth_path".to_string(),
+            vec![sig.auth_path.iter().flatten().copied().collect()],
+        ),
+        ("expected_root".to_string(), vec![root.to_vec()]),
+    ]);
+    let witness = ExecutionWitness {
+        preamble_memory_len: PREAMBLE_MEMORY_LEN,
+        hints,
+    };
+    execute_bytecode(&bytecode, &vec![F::from_usize(0); DIGEST_LEN], &witness, false);
 }
-    

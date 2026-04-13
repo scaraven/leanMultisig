@@ -15,9 +15,11 @@ MESSAGE_LEN     = 9    # FEs per message
 FORS_SIG_SIZE_FE      = SPX_FORS_TREES * (1 + SPX_FORS_HEIGHT) * DIGEST_LEN        # 1152
 HYPERTREE_SIG_SIZE_FE = SPX_D * (RANDOMNESS_LEN + SPX_WOTS_LEN * DIGEST_LEN + SPX_TREE_HEIGHT * DIGEST_LEN)  # 1053
 
+MERKLE_LEVEL_STEP = 3 # number of Merkle levels processed by do_3_merkle_level; must divide SPX_FORS_HEIGHT
+
 @inline
-def do_4_merkle_level(bit, state_in, sibling, state_out):
-    # Advance one binary Merkle level.
+def do_3_merkle_level(bits, state_in, sibling, state_out):
+    # Advance 5 levels of the Merkle tree.
     #
     # Inputs:
     #   bit       — position bit for this level, in {0, 1};
@@ -29,12 +31,26 @@ def do_4_merkle_level(bit, state_in, sibling, state_out):
     #               bit == 0 → left = state_in, right = sibling  (current is left child)
     #               bit == 1 → left = sibling,  right = state_in (current is right child)
     # Use bit multiplication for now
-    if bit == 0:
-        poseidon16_compress(state_in, sibling, state_out)
+    b0 = bits[0]
+    b1 = bits[1]
+    b2 = bits[2]
+    
+    intermediate_states = Array((MERKLE_LEVEL_STEP - 1) * DIGEST_LEN)
+    if b0 == 0:
+        poseidon16_compress(state_in, sibling, intermediate_states)
     else:
-        poseidon16_compress(sibling, state_in, state_out)
+        poseidon16_compress(sibling, state_in, intermediate_states)
+    
+    if b1 == 0:
+        poseidon16_compress(intermediate_states, sibling + DIGEST_LEN, intermediate_states + DIGEST_LEN)
+    else:
+        poseidon16_compress(sibling + DIGEST_LEN, intermediate_states, intermediate_states + DIGEST_LEN)
+    
+    if b2 == 0:
+        poseidon16_compress(intermediate_states + DIGEST_LEN, sibling + 2 * DIGEST_LEN, state_out)
+    else:
+        poseidon16_compress(sibling + 2 * DIGEST_LEN, intermediate_states + DIGEST_LEN, state_out)
     return
-
 
 def _iterate_hash_const(input, k: Const, output, local_zero_buf):
     # Inner compile-time-constant implementation of iterate_hash.

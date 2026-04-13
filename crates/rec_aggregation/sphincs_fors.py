@@ -19,13 +19,19 @@ def fors_merkle_verify(leaf_index, leaf_node, auth_path, out):
     #                the caller compares it against the expected root
     #
     # Precondition: leaf_index < 2^SPX_FORS_HEIGHT
-    remaining: Mut = leaf_index
     debug_assert(leaf_index < 2**SPX_FORS_HEIGHT)
-    for i in unroll(0, SPX_FORS_HEIGHT):
-        bit = remaining % 2
-        remaining = (remaining - bit) / 2
-        do_1_merkle_level(bit, leaf_node, auth_path + i * DIGEST_LEN, leaf_node)
-    copy_8(leaf_node, out)
+
+    leaf_node_arr = Array(DIGEST_LEN * (1 + SPX_FORS_HEIGHT / MERKLE_LEVEL_STEP))
+    copy_8(leaf_node, leaf_node_arr)
+
+    bits = Array(SPX_FORS_HEIGHT)
+    # As of now this is not constrained!
+    hint_decompose_bits(leaf_index, bits, SPX_FORS_HEIGHT, LITTLE_ENDIAN)
+
+    for i in unroll(0, SPX_FORS_HEIGHT / MERKLE_LEVEL_STEP):
+        do_3_merkle_level(bits + i * MERKLE_LEVEL_STEP, leaf_node_arr + i * DIGEST_LEN, 
+                          auth_path + MERKLE_LEVEL_STEP * i * DIGEST_LEN, leaf_node_arr + (i + 1) * DIGEST_LEN)        
+    copy_8(leaf_node_arr + SPX_FORS_HEIGHT / MERKLE_LEVEL_STEP * DIGEST_LEN, out)
     return
 
 

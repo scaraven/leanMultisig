@@ -116,14 +116,24 @@ The `crates/sphincs/` crate is complete: keygen, sign, and verify are all implem
 Parameters: KoalaBear field, 8-FE Poseidon2 digests, V=32 WOTS+ chains (w=16, TARGET_SUM=240),
 9-tree FORS (height 15), 3-layer hypertree (height 11 per layer).
 
-The next phase is a provable zkDSL verifier in `rec_aggregation/`. Scope is **raw
-SPHINCS+ signature verification only — no recursive aggregation**. The architectural
-plan is at `docs/SPHINCS_ZKDSL_PLAN.md`; all design decisions are resolved there.
+A provable zkDSL verifier lives in `rec_aggregation/`. Scope is **raw SPHINCS+
+signature verification only — no recursive aggregation**. The architectural plan is at
+`docs/SPHINCS_ZKDSL_PLAN.md`; all design decisions are resolved there.
 Do not re-open those decisions without reading the plan first.
 
-Planned zkDSL files (not yet implemented):
-- `sphincs_wots.py` — WOTS+ encoding decomposition, chain completion, pubkey fold
-- `sphincs_fors.py` — FORS multi-tree verification
-- `sphincs_hypertree.py` — 3-layer hypertree verification
-- `sphincs_aggregate.py` — message digest decomposition, top-level `sphincs_verify`
-- `main_sphincs.py` — simple main (no recursion, no slot, no bytecode claim)
+zkDSL implementation status:
+- `sphincs_utils.py`, `sphincs_wots.py` — implemented and tested
+- `sphincs_fors.py` — implemented; FORS Merkle test is compile-only pending a compiler fix (runtime `%` on `Mut` variables is not yet handled in the compiler)
+- `sphincs_hypertree.py`, `sphincs_aggregate.py`, `main_sphincs.py` — implemented, not yet tested
+
+### rec_aggregation test infrastructure
+
+All test programs follow this pattern:
+
+**Python** — call `build_preamble_memory()` first, pull all test data via `hint_witness`, assert internally. Do not read raw test data from `pub_mem`.
+
+**Rust** — pass `vec![F::from_usize(0); DIGEST_LEN]` as public input (8 zeros), put all test data in `hints: HashMap<String, Vec<Vec<F>>>`, use `ExecutionWitness { preamble_memory_len: PREAMBLE_MEMORY_LEN, hints }`.
+
+Why the 8-zero public input matters: `hashing.py` hardcodes `ZERO_VEC_PTR = PUBLIC_INPUT_LEN = 8`. The VM places the preamble at `[public_memory_size..public_memory_size+PREAMBLE_MEMORY_LEN)`. Passing exactly 8 FEs aligns the preamble at `[8..53)`, matching all preamble pointer constants. Any other size misaligns the preamble and causes `MemoryAlreadySet` errors.
+
+For full (non-test) programs, the 8-FE public input is the hash of all witness data; the Python reads and verifies it at address 0. See `tests/test_hashing.py` and `tests/test_hashing.rs` for the canonical example.
