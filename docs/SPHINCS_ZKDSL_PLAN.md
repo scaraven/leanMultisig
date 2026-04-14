@@ -135,8 +135,8 @@ for t in unroll(0, SPX_FORS_TREES):         # 9 iterations
     leaf_secret = fors_sig + t * (1 + SPX_FORS_HEIGHT) * DIGEST_LEN
     auth_path   = leaf_secret + DIGEST_LEN
 
-    # Hash leaf secret to level-0 node (one Poseidon call)
-    leaf_node = poseidon16_compress(leaf_secret, zero_buf)
+    # leaf_secret is already the level-0 node digest in the flat signature format
+    leaf_node = leaf_secret
 
     # Walk 15-level auth path
     # leaf_index for tree t comes from fors_indices[t]  (15-bit value, dynamic)
@@ -338,11 +338,11 @@ for i in parallel_range(0, n_sigs):
 | WOTS chain completion (avg ~240/layer × 3) | ~720             |
 | WOTS pubkey fold (31 × 3 layers)   | 93                       |
 | Hypertree Merkle paths (11 × 3)    | 33                       |
-| FORS: hash leaf secrets (9)        | 9                        |
+| FORS: hash leaf secrets (9)        | 0                        |
 | FORS: auth paths (15 × 9)          | 135                      |
 | FORS root fold (8)                 | 8                        |
 | Bit decomposition overhead         | ~20 (estimated)          |
-| **Total**                          | **~1028**                |
+| **Total**                          | **~1019**                |
 
 ---
 

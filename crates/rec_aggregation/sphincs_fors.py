@@ -12,7 +12,7 @@ def fors_merkle_verify(leaf_index, leaf_node, auth_path, out):
     #
     # Inputs:
     #   leaf_index — scalar < 2^SPX_FORS_HEIGHT; range-checked by the caller
-    #   leaf_node  — DIGEST_LEN FEs: poseidon(leaf_secret, zero_buf)
+    #   leaf_node  — DIGEST_LEN FEs: level-0 node digest from the signature
     #   auth_path  — SPX_FORS_HEIGHT * DIGEST_LEN (120) FEs: sibling hashes, bottom-up
     # Output:
     #   root_out   — DIGEST_LEN FEs: computed Merkle root written by this function;
@@ -25,8 +25,15 @@ def fors_merkle_verify(leaf_index, leaf_node, auth_path, out):
     copy_8(leaf_node, leaf_node_arr)
 
     bits = Array(SPX_FORS_HEIGHT)
-    # As of now this is not constrained!
     hint_decompose_bits(leaf_index, bits, SPX_FORS_HEIGHT, LITTLE_ENDIAN)
+    # Constrain each bit to {0, 1} and verify reconstruction matches leaf_index.
+    for i in unroll(0, SPX_FORS_HEIGHT):
+        assert bits[i] * (1 - bits[i]) == 0
+        
+    reconstructed: Mut = bits[0]
+    for i in unroll(1, SPX_FORS_HEIGHT):
+        reconstructed += bits[i] * 2**i
+    assert leaf_index == reconstructed
 
     for i in unroll(0, SPX_FORS_HEIGHT / MERKLE_LEVEL_STEP):
         copy_8(do_3_merkle_level(bits + i * MERKLE_LEVEL_STEP, leaf_node_arr + i * DIGEST_LEN, 
@@ -43,7 +50,7 @@ def fors_verify(fors_indices, fors_pubkey):
     #   - Read leaf_secret at fors_sig + t * (1 + SPX_FORS_HEIGHT) * DIGEST_LEN.
     #   - Run fors_merkle_verify(fors_indices[t], leaf_node, auth_path, roots[t]).
     # Then fold the 9 roots into fors_pubkey via fold_roots.
-    # Costs 9 (leaf hashes) + 9*15 (auth path) + 8 (fold) = 152 Poseidon calls.
+    # Costs 9*15 (auth path) + 8 (fold) = 143 Poseidon calls.
     #
     # Inputs:
     #   fors_indices — SPX_FORS_TREES FEs, each < 2^SPX_FORS_HEIGHT;

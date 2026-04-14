@@ -65,6 +65,10 @@ def wots_encode_and_complete(message, layer_index, randomness, chain_tips, wots_
         for j in unroll(0, 6):
             assert encoding[i * 6 + j] < SPX_WOTS_W
 
+        # Constrain the high 7-bit remainder so the hinted decomposition
+        # corresponds to a valid 31-bit FE decomposition.
+        assert remaining[i] < 2**7 - 1
+
         partial_sum: Mut = remaining[i] * 2**24
         for j in unroll(0, 6):
             partial_sum += encoding[i * 6 + j] * SPX_WOTS_W**j
