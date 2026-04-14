@@ -1,7 +1,6 @@
 from snark_lib import *
 from sphincs_utils import *
 
-
 @inline
 def fors_merkle_verify(leaf_index, leaf_node, auth_path, out):
     # Verify a single SPX_FORS_HEIGHT (15)-level binary Merkle auth path.
@@ -41,9 +40,8 @@ def fors_merkle_verify(leaf_index, leaf_node, auth_path, out):
     copy_8(leaf_node_arr + SPX_FORS_HEIGHT / MERKLE_LEVEL_STEP * DIGEST_LEN, out)
     return
 
-
 @inline
-def fors_verify(fors_indices, fors_pubkey):
+def fors_verify(fors_indices, fors_pk):
     # Verify all SPX_FORS_TREES (9) FORS trees and fold their roots into the FORS public key.
     #
     # For each tree t in unroll(0, SPX_FORS_TREES):
@@ -71,5 +69,5 @@ def fors_verify(fors_indices, fors_pubkey):
         fors_merkle_verify(fors_indices[t], leaf_node, auth_path, roots + t * DIGEST_LEN)
 
     # Fold the 9 roots into the FORS public key.
-    fold_roots(roots, fors_pubkey)
+    fold_roots(roots, fors_pk)
     return

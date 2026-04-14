@@ -3,8 +3,7 @@ from sphincs_utils import *
 from sphincs_wots import *
 
 
-@inline
-def hypertree_merkle_verify(layer_leaf_index, leaf_node, auth_path, root_out):
+def hypertree_merkle_verify(layer_leaf_index, leaf_node, auth_path):
     # Verify a single SPX_TREE_HEIGHT (11)-level binary Merkle auth path within one
     # hypertree layer. Structure identical to fors_merkle_verify but for 11 levels.
     #
@@ -23,25 +22,23 @@ def hypertree_merkle_verify(layer_leaf_index, leaf_node, auth_path, root_out):
     debug_assert(layer_leaf_index < 2**SPX_TREE_HEIGHT)
 
     bits = Array(SPX_TREE_HEIGHT)
-    decompose_bits(layer_leaf_index, bits, SPX_TREE_HEIGHT, LITTLE_ENDIAN)
-
-    # Ensure bits are constrained
-    for i in unroll(0, SPX_TREE_HEIGHT):
-        assert bits[i] * (1 - bits[i]) == 0
+    hint_decompose_bits(layer_leaf_index, bits, SPX_TREE_HEIGHT, LITTLE_ENDIAN)
         
-    reconstructed: Mut = bits[0]
-    for i in unroll(1, SPX_TREE_HEIGHT):
-        reconstructed += bits[i] * 2**i
-    assert layer_leaf_index == reconstructed
+    reconstructed: Mut = 0
+    other: Mut = leaf_node
 
-    intermediate_states = Array((SPX_TREE_HEIGHT + 1) * DIGEST_LEN)
-    copy_8(leaf_node, intermediate_states)
     for i in unroll(0, SPX_TREE_HEIGHT):
-        do_1_merkel_level(bits[i], intermediate_states + i * DIGEST_LEN, auth_path + i * DIGEST_LEN, intermediate_states + (i + 1) * DIGEST_LEN)
-    
-    copy_8(intermediate_states + SPX_TREE_HEIGHT * DIGEST_LEN, root_out)
-    return
+        # Constrain bits[i] to {0, 1} and verify reconstruction matches layer_leaf_index.
+        reconstructed += bits[i] * 2**i
+        assert bits[i] * (1 - bits[i]) == 0
 
+        if bits[i] == 0:
+            poseidon16_compress(other, auth_path + i * DIGEST_LEN, other)
+        else:
+            poseidon16_compress(auth_path + i * DIGEST_LEN, other, other)
+    
+    assert layer_leaf_index == reconstructed
+    return other
 
 @inline
 def hypertree_verify(fors_pubkey, layer_leaf_indices, expected_pk):
@@ -100,8 +97,7 @@ def hypertree_verify(fors_pubkey, layer_leaf_indices, expected_pk):
         if l < SPX_D - 1:
             # Intermediate layer: walk the auth path to get the layer root, then hash it
             # with domain separator [l+1, 0, ..., 0] to produce the next layer's message.
-            layer_root = Array(DIGEST_LEN)
-            hypertree_merkle_verify(layer_leaf_indices[l], wots_leaf, auth_path_ptr, layer_root)
+            layer_root = hypertree_merkle_verify(layer_leaf_indices[l], wots_leaf, auth_path_ptr)
 
             domain_sep = Array(DIGEST_LEN)
             domain_sep[0] = l + 1
@@ -110,8 +106,7 @@ def hypertree_verify(fors_pubkey, layer_leaf_indices, expected_pk):
             poseidon16_compress(layer_root, domain_sep, messages + (l + 1) * DIGEST_LEN)
         else:
             # Final layer: walk the auth path and assert the computed root equals expected_pk.
-            final_root = Array(DIGEST_LEN)
-            hypertree_merkle_verify(layer_leaf_indices[l], wots_leaf, auth_path_ptr, final_root)
+            final_root = hypertree_merkle_verify(layer_leaf_indices[l], wots_leaf, auth_path_ptr)
             for j in unroll(0, DIGEST_LEN):
                 assert final_root[j] == expected_pk[j]
     return

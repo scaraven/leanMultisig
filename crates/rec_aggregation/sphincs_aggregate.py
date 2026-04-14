@@ -45,14 +45,7 @@ def decompose_message_digest(message_digest, fors_indices, layer_leaf_indices):
         fors_indices[t] = hints[2 + t]
 
     # ── Bit-decompose and range-check leaf_idx (11 bits, LE) ──────────────────
-    leaf_bits = Array(LEAF_BITS)
-    hint_decompose_bits(leaf_idx, leaf_bits, LEAF_BITS, LITTLE_ENDIAN)
-    leaf_reconstructed: Mut = leaf_bits[0]
-    for i in unroll(0, LEAF_BITS):
-        assert leaf_bits[i] * (1 - leaf_bits[i]) == 0
-    for i in unroll(1, LEAF_BITS):
-        leaf_reconstructed += leaf_bits[i] * 2**i
-    assert leaf_idx == leaf_reconstructed
+    assert leaf_idx < 2**LEAF_BITS
 
     # ── Bit-decompose and range-check tree_address (22 bits, LE) ──────────────
     ta_bits = Array(TREE_BITS)
@@ -88,14 +81,7 @@ def decompose_message_digest(message_digest, fors_indices, layer_leaf_indices):
     assert fi_bits[119] == 0  # mhash bit 119 = FE[4] bit 31 = fors_indices[7] bit 14
 
     # ── Range-check fe5_upper (< 2^16) ────────────────────────────────────────
-    fe5_upper_bits = Array(16)
-    hint_decompose_bits(fe5_upper, fe5_upper_bits, 16, LITTLE_ENDIAN)
-    fe5_upper_reconstructed: Mut = fe5_upper_bits[0]
-    for i in unroll(0, 16):
-        assert fe5_upper_bits[i] * (1 - fe5_upper_bits[i]) == 0
-    for i in unroll(1, 16):
-        fe5_upper_reconstructed += fe5_upper_bits[i] * 2**i
-    assert fe5_upper == fe5_upper_reconstructed
+    assert fe5_upper < 2**16
 
     # ── Compute layer_leaf_indices from tree_address bits ─────────────────────
     layer_leaf_indices[0] = leaf_idx
@@ -151,7 +137,6 @@ def decompose_message_digest(message_digest, fors_indices, layer_leaf_indices):
     return
 
 
-@inline
 def sphincs_verify(pk, message):
     # Top-level SPHINCS+ signature verifier.
     #
@@ -183,9 +168,8 @@ def sphincs_verify(pk, message):
     fors_indices = Array(SPX_FORS_TREES)
     layer_leaf_indices = Array(SPX_D)
     decompose_message_digest(message_digest, fors_indices, layer_leaf_indices)
-
-    fors_pk = Array(DIGEST_LEN)
-    fors_verify(fors_indices, fors_pk)
+    
+    fors_pk = fors_verify(fors_indices)
 
     hypertree_verify(fors_pk, layer_leaf_indices, pk)
     return

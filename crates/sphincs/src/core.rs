@@ -5,8 +5,8 @@ use utils::poseidon16_compress_pair;
 use crate::fors::ForsSignature;
 use crate::hypertree::HypertreeSignature;
 use crate::{
-    Digest, F, ForsPublicKey, ForsSecretKey, HypertreeSecretKey, MESSAGE_LEN_FE, SPX_FORS_MSG_BYTES, SPX_LEAF_BITS,
-    SPX_TREE_BITS, fors, hypertree,
+    DIGEST_SIZE, Digest, F, ForsPublicKey, ForsSecretKey, HypertreeSecretKey, MESSAGE_LEN_FE, SPX_FORS_MSG_BYTES,
+    SPX_LEAF_BITS, SPX_TREE_BITS, SPX_TREE_HEIGHT, fors, hypertree,
 };
 
 #[derive(Debug)]
@@ -121,6 +121,31 @@ fn extract_digest_hash(
     let mhash: [u8; SPX_FORS_MSG_BYTES] = buf[5..5 + SPX_FORS_MSG_BYTES].try_into()?;
 
     Ok((leaf_idx, tree_address, mhash))
+}
+
+// Extract digest parts used for hint generation when running zkDSL
+pub fn extract_digest_parts(digest: &[F; DIGEST_SIZE]) -> (usize, usize, [u8; SPX_FORS_MSG_BYTES], usize) {
+    let mut buf = [0u8; 32];
+    for (i, fe) in digest.iter().enumerate() {
+        buf[i * 4..][..4].copy_from_slice(&fe.as_canonical_u32().to_le_bytes());
+    }
+
+    let leaf_idx = {
+        let window = u16::from_le_bytes([buf[0], buf[1]]);
+        (window & ((1 << SPX_TREE_HEIGHT) - 1)) as usize
+    };
+
+    let tree_address = {
+        let window = u32::from_le_bytes([buf[2], buf[3], buf[4], 0]);
+        (window & ((1 << SPX_TREE_BITS) - 1)) as usize
+    };
+
+    let mhash: [u8; SPX_FORS_MSG_BYTES] = buf[5..5 + SPX_FORS_MSG_BYTES].try_into().unwrap();
+
+    // FE[5] stores mhash bits 120..134 in bits 0..14; range-check the remaining top 16 bits.
+    let fe5_upper = ((digest[5].as_canonical_u32() >> 15) & 0xFFFF) as usize;
+
+    (leaf_idx, tree_address, mhash, fe5_upper)
 }
 
 impl SphincsPublicKey {

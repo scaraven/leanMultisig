@@ -46,6 +46,18 @@ pub struct HypertreeSignature {
     pub layers: [HypertreeLayerSig; SPX_D],
 }
 
+impl HypertreeSignature {
+    pub fn flatten_hypertree_sig(&self) -> Vec<F> {
+        let mut out = Vec::new();
+        for layer in &self.layers {
+            out.extend_from_slice(&layer.wots_sig.randomness);
+            out.extend(layer.wots_sig.chain_tips.iter().flatten().copied());
+            out.extend(layer.auth_path.iter().flatten().copied());
+        }
+        out
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HypertreeLayerSig {
     pub wots_sig: WotsSignature,
