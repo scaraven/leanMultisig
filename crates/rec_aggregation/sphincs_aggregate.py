@@ -137,6 +137,7 @@ def decompose_message_digest(message_digest, fors_indices, layer_leaf_indices):
     return
 
 
+@inline
 def sphincs_verify(pk, message):
     # Top-level SPHINCS+ signature verifier.
     #
@@ -168,7 +169,8 @@ def sphincs_verify(pk, message):
     layer_leaf_indices = Array(SPX_D)
     decompose_message_digest(message_digest, fors_indices, layer_leaf_indices)
     
-    fors_pk = fors_verify(fors_indices)
+    fors_pk = Array(DIGEST_LEN)
+    fors_verify(fors_indices, fors_pk)
 
     hypertree_verify(fors_pk, layer_leaf_indices, pk)
     return

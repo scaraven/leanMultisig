@@ -4,8 +4,8 @@ use lean_vm::*;
 use rand::{RngExt, SeedableRng, rngs::StdRng};
 use rec_aggregation::PREAMBLE_MEMORY_LEN;
 use sphincs::{
-    RANDOMNESS_LEN_FE, SPX_FORS_HEIGHT, SPX_FORS_TREES, SPX_WOTS_LEN, SPX_WOTS_W, fold_roots, fors_key_gen,
-    fors_sig_to_flat, fors_sign, fors_sign_single_tree,
+    RANDOMNESS_LEN_FE, SPX_FORS_HEIGHT, SPX_FORS_TREES, SPX_TREE_HEIGHT, SPX_WOTS_LEN, SPX_WOTS_W,
+    extract_fors_indices, fold_roots, fors_key_gen, fors_sig_to_flat, fors_sign, fors_sign_single_tree,
     wots::{WotsPublicKey, find_randomness_for_wots_encoding, iterate_hash, wots_encode},
 };
 use std::collections::HashMap;
@@ -285,4 +285,52 @@ fn test_sphincs_fors_verify() {
         try_execute_bytecode(&bytecode, &vec![F::from_usize(0); DIGEST_LEN], &witness_wrong, false).is_err(),
         "should fail: wrong expected root"
     );
+}
+
+#[test]
+fn test_decompose_message_digest() {
+    let path = format!("{}/tests/test_message_decompose.py", env!("CARGO_MANIFEST_DIR"));
+    let bytecode = compile_program(&ProgramSource::Filepath(path));
+
+    let mut rng = StdRng::seed_from_u64(42);
+    let tree_mask = (1usize << SPX_TREE_HEIGHT) - 1;
+
+    for _ in 0..10 {
+        let message_digest: [F; DIGEST_LEN] = rng.random();
+
+        let (leaf_idx, tree_address, mhash, fe5_upper) = sphincs::core::extract_digest_parts(&message_digest);
+        let fors_indices = extract_fors_indices(&mhash);
+
+        let mut digest_decomposition = Vec::with_capacity(2 + SPX_FORS_TREES + 1);
+        digest_decomposition.push(F::from_usize(leaf_idx));
+        digest_decomposition.push(F::from_usize(tree_address));
+        digest_decomposition.extend(fors_indices.iter().map(|&i| F::from_usize(i)));
+        digest_decomposition.push(F::from_usize(fe5_upper));
+
+        let layer_leaf_indices = [
+            leaf_idx,
+            tree_address & tree_mask,
+            (tree_address >> SPX_TREE_HEIGHT) & tree_mask,
+        ];
+
+        let hints = HashMap::from([
+            ("message_digest".to_string(), vec![message_digest.to_vec()]),
+            ("digest_decomposition".to_string(), vec![digest_decomposition]),
+            (
+                "expected_fors_indices".to_string(),
+                vec![fors_indices.iter().map(|&i| F::from_usize(i)).collect()],
+            ),
+            (
+                "expected_layer_leaf_indices".to_string(),
+                vec![layer_leaf_indices.iter().map(|&i| F::from_usize(i)).collect::<Vec<_>>()],
+            ),
+        ]);
+
+        let witness = ExecutionWitness {
+            preamble_memory_len: PREAMBLE_MEMORY_LEN,
+            hints,
+        };
+
+        execute_bytecode(&bytecode, &vec![F::from_usize(0); DIGEST_LEN], &witness, false);
+    }
 }
