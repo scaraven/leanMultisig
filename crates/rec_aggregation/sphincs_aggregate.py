@@ -159,8 +159,7 @@ def sphincs_verify(pk, message):
     #   Fails the circuit if any sub-verification does not hold.
     right = Array(DIGEST_LEN)
     right[0] = message[8]
-    for i in unroll(1, DIGEST_LEN):
-        right[i] = 0
+    set_to_7_zeros(right + 1)
 
     message_digest = Array(DIGEST_LEN)
     poseidon16_compress(message, right, message_digest)
