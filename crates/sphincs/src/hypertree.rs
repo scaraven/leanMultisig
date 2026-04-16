@@ -1,3 +1,4 @@
+use backend::{IntoParallelIterator, ParallelIterator, ParallelSlice};
 use serde::{Deserialize, Serialize};
 use utils::poseidon16_compress_pair;
 
@@ -120,7 +121,7 @@ fn build_layer_tree(seed: &[u8; 20], layer: usize, tree_address: usize) -> (Dige
     let global_base = tree_address * num_leaves;
 
     let leaf_nodes: Vec<Digest> = (0..num_leaves)
-        .map(|local| {
+        .into_par_iter().map(|local| {
             let preimages = derive_wots_preimages(seed, layer, global_base + local);
             WotsSecretKey::new(preimages).public_key().hash()
         })
@@ -130,7 +131,7 @@ fn build_layer_tree(seed: &[u8; 20], layer: usize, tree_address: usize) -> (Dige
     for _ in 0..SPX_TREE_HEIGHT {
         let prev = levels.last().unwrap();
         let next: Vec<Digest> = prev
-            .chunks_exact(2)
+            .par_chunks_exact(2)
             .map(|pair| poseidon16_compress_pair(&pair[0], &pair[1]))
             .collect();
         levels.push(next);

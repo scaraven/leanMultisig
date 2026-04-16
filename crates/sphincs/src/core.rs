@@ -63,8 +63,7 @@ impl SphincsSecretKey {
 
 impl From<&SphincsSecretKey> for ForsSecretKey {
     fn from(val: &SphincsSecretKey) -> Self {
-        let fors_sk = fors::fors_key_gen(val.seed);
-        fors_sk.0
+        val.fors_key.clone()
     }
 }
 
@@ -170,7 +169,6 @@ impl SphincsPublicKey {
 mod tests {
     use super::*;
 
-    #[ignore = "SPHINCS+ signing is slow due to large number of hashes and FORS key generation"]
     #[test]
     fn test_sphincs_sign_verify() {
         let message = [F::new(0); MESSAGE_LEN_FE];

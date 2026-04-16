@@ -1,3 +1,4 @@
+use backend::{IntoParallelIterator, ParallelIterator, ParallelSlice};
 use serde::{Deserialize, Serialize};
 use utils::poseidon16_compress_pair;
 
@@ -72,25 +73,24 @@ fn hash_leaf(secret: &Digest) -> Digest {
 pub fn fors_key_gen(seed: [u8; 20]) -> (ForsSecretKey, ForsPublicKey) {
     let num_leaves = 1usize << SPX_FORS_HEIGHT;
 
-    let mut all_nodes: Vec<Vec<Vec<Digest>>> = Vec::with_capacity(SPX_FORS_TREES);
-
-    for t in 0..SPX_FORS_TREES {
+    let all_nodes: Vec<_> = (0..SPX_FORS_TREES).into_par_iter().map(|t| {
         // Level 0: hash of each secret value.
-        let leaf_hashes: Vec<Digest> = (0..num_leaves).map(|l| derive_leaf_secret(&seed, t, l)).collect();
+        let leaf_hashes: Vec<Digest> = (0..num_leaves).into_par_iter()
+            .map(|l| derive_leaf_secret(&seed, t, l))
+            .collect();
 
         // Build inner levels bottom-up.
         let mut levels = vec![leaf_hashes];
         for _ in 0..SPX_FORS_HEIGHT {
             let prev = levels.last().unwrap();
             let next: Vec<Digest> = prev
-                .chunks_exact(2)
+                .par_chunks_exact(2)
                 .map(|pair| poseidon16_compress_pair(&pair[0], &pair[1]))
                 .collect();
             levels.push(next);
         }
-
-        all_nodes.push(levels);
-    }
+        levels
+    }).collect();
 
     let pk = fors_public_key_from_nodes(&all_nodes);
     let sk = ForsSecretKey {
@@ -272,7 +272,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "FORS keygen materializes 9*(2^15) leaves; too slow for default unit tests"]
     fn test_fors_sign_verify_roundtrip_ignored() {
         // NOTE: This roundtrip is correct but extremely expensive in this implementation.
         // Run explicitly with: cargo test -p sphincs -- --ignored
