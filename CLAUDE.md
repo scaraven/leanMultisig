@@ -81,6 +81,7 @@ The root crate exposes a public API for XMSS operations:
 - All AIR columns use the base field only; extension field operations are done via AIR constraints
 - Native CPU features enabled by default (`target-cpu=native` in `.cargo/config.toml`)
 - `--release` is expected for all meaningful runs (proving is compute-intensive)
+- zkDSL comments: use `"""..."""` multi-line strings for section separators and block explanations. Do NOT use `# ── ... ──` or similar `#`-based banner lines to section off code.
 
 ## Collaboration Style
 
@@ -124,7 +125,8 @@ Do not re-open those decisions without reading the plan first.
 zkDSL implementation status:
 - `sphincs_utils.py`, `sphincs_wots.py` — implemented and tested
 - `sphincs_fors.py` — implemented; FORS Merkle test is compile-only pending a compiler fix (runtime `%` on `Mut` variables is not yet handled in the compiler)
-- `sphincs_hypertree.py`, `sphincs_aggregate.py`, `main_sphincs.py` — implemented, not yet tested
+- `sphincs_hypertree.py`, `sphincs_aggregate.py` — implemented, not yet tested
+- `main_sphincs.py` — implemented (batch verifier, per-signer independent messages, public input = hash of [n_sigs | pubkeys | messages])
 
 ### rec_aggregation test infrastructure
 
