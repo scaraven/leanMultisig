@@ -36,6 +36,14 @@ def decompose_message_digest(message_digest, fors_indices, layer_leaf_indices):
     hints = Array(HINT_LEN)
     hint_witness("digest_decomposition", hints)
 
+    fe0_unused = Array(1)
+    hint_witness("fe0_unused_bits", fe0_unused)
+    assert fe0_unused[0] < 2 ** 5
+
+    fe1_unused = Array(1)
+    hint_witness("fe1_unused_bits", fe1_unused)
+    assert fe1_unused[0] < 2 ** 2
+
     leaf_idx     = hints[0]
     tree_address = hints[1]
     fe5_upper    = hints[HINT_LEN - 1]
@@ -99,14 +107,20 @@ def decompose_message_digest(message_digest, fors_indices, layer_leaf_indices):
     fe0: Mut = leaf_idx
     for i in unroll(0, 15):
         fe0 += ta_bits[i] * 2**(16 + i)
+
+    # Add unused bits to ensure that message_diget matches
+    fe0 += fe0_unused[0] * 2**11
     assert message_digest[0] == fe0
 
-    # FE[1]: ta_bits[15:22] at bits 0–6; bit 7 unused; fi_bits[0:23] at bits 8–30.
+    # FE[1]: ta_bits[16:22] at bits 0–5; bits 6–7 unused (2 bits); fi_bits[0:23] at bits 8–30.
+    # Note: ta_bits[15] = global bit 31 which is always 0 (KoalaBear), so not included.
     fe1: Mut = 0
-    for i in unroll(0, 7):
-        fe1 += ta_bits[15 + i] * 2**i
+    for i in unroll(0, 6):
+        fe1 += ta_bits[16 + i] * 2**i
     for j in unroll(0, 23):
         fe1 += fi_bits[j] * 2**(8 + j)
+
+    fe1 += fe1_unused[0] * 2**6
     assert message_digest[1] == fe1
 
     # FE[2]: fi_bits[24:55] at bits 0–30 (mhash bits 24–54; gap at bit 23 = 0).

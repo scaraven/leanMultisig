@@ -121,7 +121,8 @@ fn build_layer_tree(seed: &[u8; 20], layer: usize, tree_address: usize) -> (Dige
     let global_base = tree_address * num_leaves;
 
     let leaf_nodes: Vec<Digest> = (0..num_leaves)
-        .into_par_iter().map(|local| {
+        .into_par_iter()
+        .map(|local| {
             let preimages = derive_wots_preimages(seed, layer, global_base + local);
             WotsSecretKey::new(preimages).public_key().hash()
         })

@@ -3,10 +3,8 @@ use lean_compiler::*;
 use lean_vm::*;
 use rec_aggregation::PREAMBLE_MEMORY_LEN;
 use sphincs::{
-    HypertreeSecretKey, HypertreeSignature, MESSAGE_LEN_FE, RANDOMNESS_LEN_FE, SPX_D,
-    SPX_FORS_TREES, SPX_TREE_BITS, SPX_TREE_HEIGHT, SPX_WOTS_LEN,
-    core::SphincsSecretKey,
-    extract_fors_indices, fors_sig_to_flat, hypertree_sign,
+    HypertreeSecretKey, HypertreeSignature, MESSAGE_LEN_FE, RANDOMNESS_LEN_FE, SPX_D, SPX_FORS_TREES, SPX_TREE_BITS,
+    SPX_TREE_HEIGHT, SPX_WOTS_LEN, core::SphincsSecretKey, extract_fors_indices, fors_sig_to_flat, hypertree_sign,
 };
 use std::collections::HashMap;
 use utils::poseidon16_compress_pair;
@@ -53,7 +51,8 @@ fn build_sphincs_hints(seed: [u8; 20], message: [F; MESSAGE_LEN_FE]) -> HashMap<
     right[0] = message[8];
     let message_digest = poseidon16_compress_pair(&message[0..8].try_into().unwrap(), &right);
 
-    let (leaf_idx, tree_address, mhash, fe5_upper) = sphincs::core::extract_digest_parts(&message_digest);
+    let (leaf_idx, tree_address, mhash, fe5_upper, fe0_unused, fe1_unused) =
+        sphincs::core::extract_digest_parts(&message_digest);
     let fors_indices = extract_fors_indices(&mhash);
 
     let mut digest_decomposition = Vec::with_capacity(2 + SPX_FORS_TREES + 1);
@@ -74,6 +73,8 @@ fn build_sphincs_hints(seed: [u8; 20], message: [F; MESSAGE_LEN_FE]) -> HashMap<
         ("digest_decomposition".to_string(), vec![digest_decomposition]),
         ("fors_sig".to_string(), vec![fors_sig_flat]),
         ("hypertree_sig".to_string(), vec![hypertree_sig_flat]),
+        ("fe0_unused_bits".to_string(), vec![vec![F::from_usize(fe0_unused)]]),
+        ("fe1_unused_bits".to_string(), vec![vec![F::from_usize(fe1_unused)]]),
     ])
 }
 
@@ -154,10 +155,7 @@ fn test_hypertree_verify() {
             vec![layer_leaf_indices.iter().map(|&i| F::from_usize(i)).collect()],
         ),
         ("expected_pk".to_string(), vec![pk.to_vec()]),
-        (
-            "hypertree_sig".to_string(),
-            vec![sig.flatten_hypertree_sig()],
-        ),
+        ("hypertree_sig".to_string(), vec![sig.flatten_hypertree_sig()]),
     ]);
 
     let witness = ExecutionWitness {
@@ -175,10 +173,7 @@ fn test_hypertree_verify() {
             vec![layer_leaf_indices.iter().map(|&i| F::from_usize(i)).collect()],
         ),
         ("expected_pk".to_string(), vec![wrong_pk.to_vec()]),
-        (
-            "hypertree_sig".to_string(),
-            vec![sig.flatten_hypertree_sig()],
-        ),
+        ("hypertree_sig".to_string(), vec![sig.flatten_hypertree_sig()]),
     ]);
     let wrong_witness = ExecutionWitness {
         preamble_memory_len: PREAMBLE_MEMORY_LEN,

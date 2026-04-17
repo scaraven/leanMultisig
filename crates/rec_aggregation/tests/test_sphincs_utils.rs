@@ -298,7 +298,8 @@ fn test_decompose_message_digest() {
     for _ in 0..10 {
         let message_digest: [F; DIGEST_LEN] = rng.random();
 
-        let (leaf_idx, tree_address, mhash, fe5_upper) = sphincs::core::extract_digest_parts(&message_digest);
+        let (leaf_idx, tree_address, mhash, fe5_upper, fe0_unused, fe1_unused) =
+            sphincs::core::extract_digest_parts(&message_digest);
         let fors_indices = extract_fors_indices(&mhash);
 
         let mut digest_decomposition = Vec::with_capacity(2 + SPX_FORS_TREES + 1);
@@ -324,6 +325,8 @@ fn test_decompose_message_digest() {
                 "expected_layer_leaf_indices".to_string(),
                 vec![layer_leaf_indices.iter().map(|&i| F::from_usize(i)).collect::<Vec<_>>()],
             ),
+            ("fe0_unused_bits".to_string(), vec![vec![F::from_usize(fe0_unused)]]),
+            ("fe1_unused_bits".to_string(), vec![vec![F::from_usize(fe1_unused)]]),
         ]);
 
         let witness = ExecutionWitness {
