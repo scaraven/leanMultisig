@@ -34,6 +34,10 @@ impl SphincsSecretKey {
         SphincsPublicKey { root: hypertree_pk.0 }
     }
 
+    pub fn seed(&self) -> [u8; 20] {
+        self.seed
+    }
+
     fn fors_pk(&self) -> ForsPublicKey {
         self.fors_pubkey
     }
