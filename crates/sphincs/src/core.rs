@@ -173,6 +173,10 @@ impl SphincsPublicKey {
 
         hypertree::hypertree_verify(&sig.hypertree_sig, &fors_pk.0, leaf_idx, tree_address, &self.root)
     }
+
+    pub fn root(&self) -> Digest {
+        self.root
+    }
 }
 
 #[cfg(test)]

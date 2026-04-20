@@ -2,7 +2,7 @@
 
 pub mod fors;
 pub mod hypertree;
-// pub mod signers_cache;  // TODO: not yet implemented
+pub mod signers_cache;
 pub mod core;
 pub mod wots;
 

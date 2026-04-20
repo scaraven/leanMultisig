@@ -1035,9 +1035,12 @@ name = "sphincs"
 version = "0.1.0"
 dependencies = [
  "backend",
+ "lz4_flex",
  "postcard",
  "rand",
+ "rayon",
  "serde",
+ "sha3",
  "utils",
 ]
 
