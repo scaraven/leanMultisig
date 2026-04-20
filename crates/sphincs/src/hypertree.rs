@@ -1,3 +1,4 @@
+use backend::{IntoParallelIterator, ParallelIterator, ParallelSlice};
 use serde::{Deserialize, Serialize};
 use utils::poseidon16_compress_pair;
 
@@ -44,6 +45,18 @@ pub struct HypertreePublicKey(pub Digest);
 pub struct HypertreeSignature {
     /// One entry per layer, bottom (layer 0) to top (layer SPX_D-1).
     pub layers: [HypertreeLayerSig; SPX_D],
+}
+
+impl HypertreeSignature {
+    pub fn flatten_hypertree_sig(&self) -> Vec<F> {
+        let mut out = Vec::new();
+        for layer in &self.layers {
+            out.extend_from_slice(&layer.wots_sig.randomness);
+            out.extend(layer.wots_sig.chain_tips.iter().flatten().copied());
+            out.extend(layer.auth_path.iter().flatten().copied());
+        }
+        out
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -108,6 +121,7 @@ fn build_layer_tree(seed: &[u8; 20], layer: usize, tree_address: usize) -> (Dige
     let global_base = tree_address * num_leaves;
 
     let leaf_nodes: Vec<Digest> = (0..num_leaves)
+        .into_par_iter()
         .map(|local| {
             let preimages = derive_wots_preimages(seed, layer, global_base + local);
             WotsSecretKey::new(preimages).public_key().hash()
@@ -118,7 +132,7 @@ fn build_layer_tree(seed: &[u8; 20], layer: usize, tree_address: usize) -> (Dige
     for _ in 0..SPX_TREE_HEIGHT {
         let prev = levels.last().unwrap();
         let next: Vec<Digest> = prev
-            .chunks_exact(2)
+            .par_chunks_exact(2)
             .map(|pair| poseidon16_compress_pair(&pair[0], &pair[1]))
             .collect();
         levels.push(next);
