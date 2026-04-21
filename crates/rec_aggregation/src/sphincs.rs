@@ -1,21 +1,42 @@
-use backend::PrimeCharacteristicRing;
-use lean_vm::{DIGEST_LEN, ExecutionWitness, F};
+use backend::{PrimeCharacteristicRing, Proof, ProofError};
+use lean_prover::default_whir_config;
+use lean_prover::prove_execution::prove_execution;
+use lean_prover::verify_execution::{ProofVerificationDetails, verify_execution};
+use lean_vm::{DIGEST_LEN, ExecutionMetadata, ExecutionWitness, F};
+use serde::{Deserialize, Serialize};
 use sphincs::{
-    MESSAGE_LEN_FE, SPX_FORS_TREES, core::SphincsSecretKey, core::extract_digest_parts, extract_fors_indices,
-    fors_sig_to_flat,
+    MESSAGE_LEN_FE, SPX_FORS_TREES,
+    core::{SphincsPublicKey, SphincsSig, extract_digest_parts},
+    extract_fors_indices, fors_sig_to_flat,
 };
 use std::collections::HashMap;
 use utils::{poseidon_compress_slice, poseidon16_compress_pair};
 
 use crate::PREAMBLE_MEMORY_LEN;
 
+/// One signer's pre-computed input to the SPHINCS+ batch verifier.
+/// The secret key is not required here — all hint data is derivable from the signature.
+
 #[derive(Debug)]
 pub struct SphincsSignerInput {
-    pub secret_key: SphincsSecretKey,
+    pub pubkey: SphincsPublicKey,
+    pub sig: SphincsSig,
     pub message: [F; MESSAGE_LEN_FE],
 }
 
-/// Compute the 8-FE public input commitment for a sphincs batch verification run.
+/// Result of a SPHINCS+ batch aggregation: a proof and optional execution metadata.
+/// No `bytecode_point` field — SPHINCS+ has no recursive proof children.
+///
+/// TODO: if recursion is ever added to main_sphincs.py, add `bytecode_point` here
+/// analogous to `AggregatedXMSS` and reintroduce the self-referential compilation loop.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AggregatedSPHINCS {
+    pub proof: Proof<F>,
+    #[serde(skip, default)]
+    pub metadata: Option<ExecutionMetadata>,
+}
+
+/// Compute the 8-FE public input commitment for a SPHINCS+ batch verification run.
 ///
 /// Mirrors the Python commitment scheme in main_sphincs.py:
 ///   seg_nsigs    = poseidon(ZERO_VEC, [n_sigs, 0, ..., 0])
@@ -40,10 +61,14 @@ pub fn sphincs_public_input(pubkeys: &[[F; DIGEST_LEN]], messages: &[[F; MESSAGE
     poseidon16_compress_pair(&h01, &seg_messages)
 }
 
-/// Build per-signer hints for sphincs_verify (the hints consumed inside sphincs_aggregate.py).
-fn build_signer_hints(sk: &SphincsSecretKey, message: &[F; MESSAGE_LEN_FE], hints: &mut HashMap<String, Vec<Vec<F>>>) {
-    let sig = sk.sign(message).expect("SPHINCS+ signing failed");
-
+/// Append per-signer hints derived from a pre-computed signature.
+/// The secret key is not needed: all hint data comes from the sig and message.
+fn build_signer_hints(
+    pubkey: &SphincsPublicKey,
+    sig: &SphincsSig,
+    message: &[F; MESSAGE_LEN_FE],
+    hints: &mut HashMap<String, Vec<Vec<F>>>,
+) {
     let mut right = [F::ZERO; DIGEST_LEN];
     right[0] = message[8];
     let message_digest = poseidon16_compress_pair(&message[0..8].try_into().unwrap(), &right);
@@ -77,17 +102,59 @@ fn build_signer_hints(sk: &SphincsSecretKey, message: &[F; MESSAGE_LEN_FE], hint
         .entry("fe1_unused_bits".to_string())
         .or_default()
         .push(vec![F::from_usize(fe1_unused)]);
+
+    // Suppress unused variable warning — pubkey is passed for API clarity and future use
+    // (e.g. if we need to cross-check pk against the sig's embedded public key).
+    let _ = pubkey;
 }
 
-/// Build the full ExecutionWitness for main_sphincs.py.
+/// Prove a batch of SPHINCS+ signatures.
+///
+/// Returns an `AggregatedSPHINCS` containing the proof and execution metadata.
+/// Unlike `xmss_aggregate` there are no recursive children and no pubkey deduplication —
+/// the circuit verifies all N (pk, message, sig) triples independently as given.
+pub fn sphincs_aggregate(signers: &[SphincsSignerInput], log_inv_rate: usize) -> AggregatedSPHINCS {
+    let pubkeys: Vec<[F; DIGEST_LEN]> = signers.iter().map(|s| s.pubkey.root()).collect();
+    let messages: Vec<[F; MESSAGE_LEN_FE]> = signers.iter().map(|s| s.message).collect();
+
+    let public_input = sphincs_public_input(&pubkeys, &messages).to_vec();
+    let witness = build_sphincs_witness(signers);
+    let whir_config = default_whir_config(log_inv_rate);
+
+    let execution_proof = prove_execution(
+        crate::compilation::get_sphincs_bytecode(),
+        &public_input,
+        &witness,
+        &whir_config,
+        false,
+    );
+
+    AggregatedSPHINCS {
+        proof: execution_proof.proof,
+        metadata: Some(execution_proof.metadata),
+    }
+}
+
+/// Verify a SPHINCS+ batch aggregation proof.
+pub fn sphincs_verify_aggregation(
+    pubkeys: &[[F; DIGEST_LEN]],
+    messages: &[[F; MESSAGE_LEN_FE]],
+    agg: &AggregatedSPHINCS,
+) -> Result<ProofVerificationDetails, ProofError> {
+    let public_input = sphincs_public_input(pubkeys, messages).to_vec();
+    verify_execution(
+        crate::compilation::get_sphincs_bytecode(),
+        &public_input,
+        agg.proof.clone(),
+    )
+    .map(|(details, _)| details)
+}
+
+/// Build the full `ExecutionWitness` for main_sphincs.py from pre-signed inputs.
 pub fn build_sphincs_witness(signers: &[SphincsSignerInput]) -> ExecutionWitness {
     let n = signers.len();
 
-    let pubkeys: Vec<[F; DIGEST_LEN]> = signers
-        .iter()
-        .map(|s| sphincs::HypertreeSecretKey::new(s.secret_key.seed()).public_key().0)
-        .collect();
-
+    let pubkeys: Vec<[F; DIGEST_LEN]> = signers.iter().map(|s| s.pubkey.root()).collect();
     let pubkeys_flat: Vec<F> = pubkeys.iter().flatten().copied().collect();
     let messages_flat: Vec<F> = signers.iter().flat_map(|s| s.message.iter().copied()).collect();
 
@@ -97,7 +164,7 @@ pub fn build_sphincs_witness(signers: &[SphincsSignerInput]) -> ExecutionWitness
     hints.insert("messages".to_string(), vec![messages_flat]);
 
     for signer in signers {
-        build_signer_hints(&signer.secret_key, &signer.message, &mut hints);
+        build_signer_hints(&signer.pubkey, &signer.sig, &signer.message, &mut hints);
     }
 
     ExecutionWitness {

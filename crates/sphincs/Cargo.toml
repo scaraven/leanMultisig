@@ -12,6 +12,14 @@ rand.workspace = true
 utils.workspace = true
 backend.workspace = true
 serde.workspace = true
+rayon.workspace = true
+sha3.workspace = true
+lz4_flex.workspace = true
+postcard.workspace = true
+
+[[bin]]
+name = "sphincs-gen-cache"
+path = "src/bin/benchmark.rs"
 
 [dev-dependencies]
 postcard.workspace = true

@@ -13,7 +13,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 use crate::compilation::bytecode_reduction_sumcheck_proof_size;
-pub use crate::compilation::{get_aggregation_bytecode, init_aggregation_bytecode};
+pub use crate::compilation::{
+    get_aggregation_bytecode, get_sphincs_bytecode, init_aggregation_bytecode, init_sphincs_bytecode,
+};
 
 pub mod benchmark;
 mod compilation;

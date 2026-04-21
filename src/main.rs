@@ -1,5 +1,5 @@
 use clap::Parser;
-use rec_aggregation::{AggregationTopology, benchmark::run_aggregation_benchmark};
+use rec_aggregation::{AggregationTopology, benchmark::{run_aggregation_benchmark, run_sphincs_benchmark}};
 mod prove_poseidons;
 
 use crate::prove_poseidons::benchmark_prove_poseidon_16;
@@ -33,6 +33,15 @@ enum Cli {
     },
     #[command(about = "Run a fancy aggregation topology")]
     FancyAggregation {},
+    #[command(about = "Aggregate SPHINCS+ signatures")]
+    Sphincs {
+        #[arg(long)]
+        n_signatures: usize,
+        #[arg(long, help = "log(1/rate) in WHIR", default_value = "1", short = 'r')]
+        log_inv_rate: usize,
+        #[arg(long, help = "Enable tracing")]
+        tracing: bool,
+    },
 }
 
 fn main() {
@@ -75,6 +84,13 @@ fn main() {
             tracing,
         } => {
             benchmark_prove_poseidon_16(log_count, tracing);
+        }
+        Cli::Sphincs {
+            n_signatures,
+            log_inv_rate,
+            tracing,
+        } => {
+            run_sphincs_benchmark(n_signatures, log_inv_rate, tracing);
         }
         Cli::FancyAggregation {} => {
             let topology = AggregationTopology {
