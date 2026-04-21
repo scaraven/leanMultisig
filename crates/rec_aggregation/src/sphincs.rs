@@ -16,6 +16,8 @@ use crate::PREAMBLE_MEMORY_LEN;
 
 /// One signer's pre-computed input to the SPHINCS+ batch verifier.
 /// The secret key is not required here — all hint data is derivable from the signature.
+
+#[derive(Debug)]
 pub struct SphincsSignerInput {
     pub pubkey: SphincsPublicKey,
     pub sig: SphincsSig,

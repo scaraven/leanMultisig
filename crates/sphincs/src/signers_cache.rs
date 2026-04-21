@@ -1,4 +1,4 @@
-use backend::{IntoParallelRefIterator, PrimeField32};
+use backend::PrimeField32;
 use rand::{RngExt, SeedableRng, rngs::StdRng};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
