@@ -361,6 +361,50 @@ fn build_vm_replacements(
     replacements
 }
 
+static SPHINCS_BYTECODE: OnceLock<Bytecode> = OnceLock::new();
+
+pub fn get_sphincs_bytecode() -> &'static Bytecode {
+    SPHINCS_BYTECODE
+        .get()
+        .unwrap_or_else(|| panic!("call init_sphincs_bytecode() first"))
+}
+
+pub fn init_sphincs_bytecode() {
+    SPHINCS_BYTECODE.get_or_init(compile_sphincs_program);
+}
+
+fn compile_sphincs_program() -> Bytecode {
+    // SPHINCS+ public input is a single 8-FE Poseidon digest — no recursive bytecode
+    // claim is embedded, so input_data_size_padded = DIGEST_LEN = 8.
+    let input_data_size_padded = DIGEST_LEN;
+    // Starting guess for the bytecode log-size. Unlike XMSS there is no self-referential
+    // dependency (main_sphincs.py does not embed the bytecode size), so a single compile
+    // pass is expected to converge. The assertion below will fire if this guess is wrong,
+    // at which point the constant should be updated.
+    //
+    // TODO: if recursion is ever added to main_sphincs.py, replace this with the same
+    // self-referential loop used in compile_main_program_self_referential().
+    let log_size_guess = 19;
+    let bytecode_zero_eval = F::ONE;
+
+    let replacements = build_vm_replacements(log_size_guess, bytecode_zero_eval, input_data_size_padded);
+
+    let filepath = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("main_sphincs.py")
+        .to_str()
+        .unwrap()
+        .to_string();
+    let bytecode = compile_program_with_flags(&ProgramSource::Filepath(filepath), CompilationFlags { replacements });
+
+    assert_eq!(bytecode_zero_eval, bytecode.instructions_multilinear[0]);
+    assert_eq!(
+        bytecode.log_size(),
+        log_size_guess,
+        "SPHINCS+ bytecode log_size changed: update log_size_guess in compile_sphincs_program()"
+    );
+    bytecode
+}
+
 pub(crate) fn bytecode_reduction_sumcheck_proof_size(bytecode_point_n_vars: usize) -> usize {
     let per_round = (3 * DIMENSION).next_multiple_of(DIGEST_LEN);
     DIGEST_LEN + bytecode_point_n_vars * per_round
