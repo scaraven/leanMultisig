@@ -36,8 +36,8 @@ def fors_merkle_verify(leaf_index, leaf_node, auth_path, out):
     assert leaf_index == reconstructed
 
     for i in unroll(0, SPX_FORS_HEIGHT / MERKLE_LEVEL_STEP):
-        copy_8(do_3_merkle_level(bits + i * MERKLE_LEVEL_STEP, leaf_node_arr + i * DIGEST_LEN, 
-                          auth_path + MERKLE_LEVEL_STEP * i * DIGEST_LEN), leaf_node_arr + (i + 1) * DIGEST_LEN)        
+        do_5_merkle_level(bits + i * MERKLE_LEVEL_STEP, leaf_node_arr + i * DIGEST_LEN, 
+                          auth_path + MERKLE_LEVEL_STEP * i * DIGEST_LEN, leaf_node_arr + (i + 1) * DIGEST_LEN)        
     copy_8(leaf_node_arr + SPX_FORS_HEIGHT / MERKLE_LEVEL_STEP * DIGEST_LEN, out)
     return
 
@@ -63,11 +63,8 @@ def fors_verify(fors_indices, fors_pk):
 
     roots = Array(SPX_FORS_TREES * DIGEST_LEN)
     for t in unroll(0, SPX_FORS_TREES):
-        leaf_node = Array(DIGEST_LEN)
-        copy_8(fors_sig + t * (1 + SPX_FORS_HEIGHT) * DIGEST_LEN, leaf_node)
-
-        auth_path = fors_sig + t * (1 + SPX_FORS_HEIGHT) * DIGEST_LEN + DIGEST_LEN
-        fors_merkle_verify(fors_indices[t], leaf_node, auth_path, roots + t * DIGEST_LEN)
+        tree_base = fors_sig + t * (1 + SPX_FORS_HEIGHT) * DIGEST_LEN
+        fors_merkle_verify(fors_indices[t], tree_base, tree_base + DIGEST_LEN, roots + t * DIGEST_LEN)
 
     # Fold the 9 roots into the FORS public key.
     fold_roots(roots, fors_pk)

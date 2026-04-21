@@ -15,7 +15,7 @@ MESSAGE_LEN     = 9    # FEs per message
 FORS_SIG_SIZE_FE      = SPX_FORS_TREES * (1 + SPX_FORS_HEIGHT) * DIGEST_LEN        # 1152
 HYPERTREE_SIG_SIZE_FE = SPX_D * (RANDOMNESS_LEN + SPX_WOTS_LEN * DIGEST_LEN + SPX_TREE_HEIGHT * DIGEST_LEN)  # 1053
 
-MERKLE_LEVEL_STEP = 3 # number of Merkle levels processed by do_3_merkle_level; must divide SPX_FORS_HEIGHT
+MERKLE_LEVEL_STEP = 5 # number of Merkle levels processed by do_3_merkle_level; must divide SPX_FORS_HEIGHT
 
 @inline
 def do_1_merkel_level(bit, state_in, sibling, out):
@@ -25,8 +25,9 @@ def do_1_merkel_level(bit, state_in, sibling, out):
         poseidon16_compress(sibling, state_in, out)
     return
 
-def do_3_merkle_level(bits, state_in, sibling):
-    # Advance 3 levels of the Merkle tree.
+@inline
+def do_5_merkle_level(bits, state_in, sibling, state_out):
+    # Advance 5 levels of the Merkle tree.
     #
     # Inputs:
     #   bit       — position bit for this level, in {0, 1};
@@ -41,8 +42,9 @@ def do_3_merkle_level(bits, state_in, sibling):
     b0 = bits[0]
     b1 = bits[1]
     b2 = bits[2]
+    b3 = bits[3]
+    b4 = bits[4]
 
-    state_out = Array(DIGEST_LEN)
     intermediate_states = Array((MERKLE_LEVEL_STEP - 1) * DIGEST_LEN)
     if b0 == 0:
         poseidon16_compress(state_in, sibling, intermediate_states)
@@ -55,27 +57,44 @@ def do_3_merkle_level(bits, state_in, sibling):
         poseidon16_compress(sibling + DIGEST_LEN, intermediate_states, intermediate_states + DIGEST_LEN)
     
     if b2 == 0:
-        poseidon16_compress(intermediate_states + DIGEST_LEN, sibling + 2 * DIGEST_LEN, state_out)
+        poseidon16_compress(intermediate_states + DIGEST_LEN, sibling + 2 * DIGEST_LEN, intermediate_states + 2 * DIGEST_LEN)
     else:
-        poseidon16_compress(sibling + 2 * DIGEST_LEN, intermediate_states + DIGEST_LEN, state_out)
-        
-    return state_out
+        poseidon16_compress(sibling + 2 * DIGEST_LEN, intermediate_states + DIGEST_LEN, intermediate_states + 2 * DIGEST_LEN)
+
+    if b3 == 0:
+        poseidon16_compress(intermediate_states + 2 * DIGEST_LEN, sibling + 3 * DIGEST_LEN, intermediate_states + 3 * DIGEST_LEN)
+    else:
+        poseidon16_compress(sibling + 3 * DIGEST_LEN, intermediate_states + 2 * DIGEST_LEN, intermediate_states + 3 * DIGEST_LEN)
+
+    if b4 == 0:
+        poseidon16_compress(intermediate_states + 3 * DIGEST_LEN, sibling + 4 * DIGEST_LEN, state_out)
+    else:
+        poseidon16_compress(sibling + 4 * DIGEST_LEN, intermediate_states + 3 * DIGEST_LEN, state_out)
+
+    return
 
 def _iterate_hash_const(input, k: Const, output, local_zero_buf):
     # Fixed-footprint specialization: every k uses the same buffer size and
     # unroll bounds so frame size is uniform across match_range arms.
-    states = Array(SPX_WOTS_W * DIGEST_LEN)
-    copy_8(input, states)
+    states = Array((SPX_WOTS_W - 2) * DIGEST_LEN)
 
-    for i in unroll(0, SPX_WOTS_W - 1):
-        curr = states + i * DIGEST_LEN
-        nxt = states + (i + 1) * DIGEST_LEN
+    if 0 < k:
+        poseidon16_compress(input, local_zero_buf, states)
+    else:
+        copy_8(input, states)
+
+    for i in unroll(1, SPX_WOTS_W - 2):
+        curr = states + (i - 1) * DIGEST_LEN
+        nxt = states + i * DIGEST_LEN
         if i < k:
             poseidon16_compress(curr, local_zero_buf, nxt)
         else:
             copy_8(curr, nxt)
 
-    copy_8(states + k * DIGEST_LEN, output)
+    if SPX_WOTS_W - 2 < k:
+        poseidon16_compress(states + (SPX_WOTS_W - 3) * DIGEST_LEN, local_zero_buf, output)
+    else:
+        copy_8(states + (SPX_WOTS_W - 3) * DIGEST_LEN, output)
     return
 
 
@@ -101,18 +120,12 @@ def fold_wots_pubkey(chain_pub_keys, out):
     #   chain_pub_keys — SPX_WOTS_LEN * DIGEST_LEN FEs: completed chain-end hashes
     # Output:
     #   out — DIGEST_LEN FEs: folded public key hash
-    copy_8(fold_keys(chain_pub_keys, SPX_WOTS_LEN), out)
+    states = Array((SPX_WOTS_LEN - 2) * DIGEST_LEN)
+    poseidon16_compress(chain_pub_keys, chain_pub_keys + DIGEST_LEN, states)
+    for i in unroll(1, SPX_WOTS_LEN - 2):
+        poseidon16_compress(states + (i - 1) * DIGEST_LEN, chain_pub_keys + (i + 1) * DIGEST_LEN, states + i * DIGEST_LEN)
+    poseidon16_compress(states + (SPX_WOTS_LEN - 3) * DIGEST_LEN, chain_pub_keys + (SPX_WOTS_LEN - 1) * DIGEST_LEN, out)
     return
-
-
-def fold_keys(keys, n: Const):
-    states = Array((n - 1) * DIGEST_LEN)
-    poseidon16_compress(keys, keys + DIGEST_LEN, states)
-    for i in unroll(1, n - 1):
-        poseidon16_compress(states + (i - 1) * DIGEST_LEN, keys + (i + 1) * DIGEST_LEN, states + i * DIGEST_LEN)
-    
-    return states + (n - 2) * DIGEST_LEN
-
 
 @inline
 def fold_roots(roots, out):
@@ -126,5 +139,9 @@ def fold_roots(roots, out):
     #   roots — SPX_FORS_TREES * DIGEST_LEN FEs: one root per FORS tree
     # Output:
     #   out — DIGEST_LEN FEs: FORS public key hash
-    copy_8(fold_keys(roots, SPX_FORS_TREES), out)
+    states = Array((SPX_FORS_TREES - 2) * DIGEST_LEN)
+    poseidon16_compress(roots, roots + DIGEST_LEN, states)
+    for i in unroll(1, SPX_FORS_TREES - 2):
+        poseidon16_compress(states + (i - 1) * DIGEST_LEN, roots + (i + 1) * DIGEST_LEN, states + i * DIGEST_LEN)
+    poseidon16_compress(states + (SPX_FORS_TREES - 3) * DIGEST_LEN, roots + (SPX_FORS_TREES - 1) * DIGEST_LEN, out)
     return

@@ -2,7 +2,8 @@ from snark_lib import *
 from sphincs_utils import *
 
 
-def wots_encode_and_complete(message, layer_index, randomness, chain_tips, local_zero_buf):
+@inline
+def wots_encode_and_complete(message, layer_index, randomness, chain_tips, local_zero_buf, wots_pubkey):
     # Recover the WOTS+ public key from a message, the layer index, the per-layer
     # randomness, and the signature chain tips.
     #
@@ -86,6 +87,5 @@ def wots_encode_and_complete(message, layer_index, randomness, chain_tips, local
         iterate_hash(chain_tips + i * DIGEST_LEN, n_remaining, chain_ends + i * DIGEST_LEN, local_zero_buf)
 
     # Step 4: fold 32 chain-end digests into wots_pubkey
-    wots_pubkey = Array(DIGEST_LEN)
     fold_wots_pubkey(chain_ends, wots_pubkey)
-    return wots_pubkey
+    return

@@ -72,9 +72,8 @@ def hypertree_verify(fors_pubkey, layer_leaf_indices, expected_pk):
     hypertree_sig = Array(HYPERTREE_SIG_SIZE_FE)
     hint_witness("hypertree_sig", hypertree_sig)
 
-    # Shared zero buffer: read-only, used for initial message hash and iterate_hash calls.
-    local_zero_buf = Array(DIGEST_LEN)
-    set_to_8_zeros(local_zero_buf)
+    # Shared zero buffer: read-only, use preamble ZERO_VEC_PTR directly.
+    local_zero_buf = ZERO_VEC_PTR
 
     # messages[l * DIGEST_LEN] holds the input message for hypertree layer l.
     # Layer 0 message: poseidon(fors_pubkey, [0,...,0]).
@@ -92,7 +91,8 @@ def hypertree_verify(fors_pubkey, layer_leaf_indices, expected_pk):
         auth_path_ptr  = chain_tips_ptr + SPX_WOTS_LEN * DIGEST_LEN
 
         # Recover WOTS+ leaf node from the current message, layer randomness, and chain tips.
-        wots_leaf = wots_encode_and_complete(messages + l * DIGEST_LEN, l, randomness_ptr, chain_tips_ptr, local_zero_buf)
+        wots_leaf = Array(DIGEST_LEN)
+        wots_encode_and_complete(messages + l * DIGEST_LEN, l, randomness_ptr, chain_tips_ptr, local_zero_buf, wots_leaf)
 
         if l < SPX_D - 1:
             # Intermediate layer: walk the auth path to get the layer root, then hash it
@@ -101,12 +101,10 @@ def hypertree_verify(fors_pubkey, layer_leaf_indices, expected_pk):
 
             domain_sep = Array(DIGEST_LEN)
             domain_sep[0] = l + 1
-            for j in unroll(1, DIGEST_LEN):
-                domain_sep[j] = 0
+            set_to_7_zeros(domain_sep + 1)
             poseidon16_compress(layer_root, domain_sep, messages + (l + 1) * DIGEST_LEN)
         else:
             # Final layer: walk the auth path and assert the computed root equals expected_pk.
             final_root = hypertree_merkle_verify(layer_leaf_indices[l], wots_leaf, auth_path_ptr)
-            for j in unroll(0, DIGEST_LEN):
-                assert final_root[j] == expected_pk[j]
+            copy_8(final_root, expected_pk)  # assert final_root == expected_pk
     return
