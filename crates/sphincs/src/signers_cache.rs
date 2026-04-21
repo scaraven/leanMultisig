@@ -129,6 +129,7 @@ fn gen_benchmark_signers_cache() -> Vec<(SphincsPublicKey, SphincsSig)> {
 #[test]
 #[ignore]
 fn test_sphincs_signature_cache() {
+    use backend::IntoParallelRefIterator;
     use rayon::iter::IndexedParallelIterator;
     let signatures = get_sphincs_benchmark_signatures();
     assert_eq!(signatures.len(), NUM_SPHINCS_SIGNERS);

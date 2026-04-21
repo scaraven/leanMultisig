@@ -1,5 +1,6 @@
 from snark_lib import *
 from sphincs_utils import *
+from utils import *
 
 @inline
 def fors_merkle_verify(leaf_index, leaf_node, auth_path, out):

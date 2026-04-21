@@ -185,6 +185,5 @@ def sphincs_verify(pk, message):
     
     fors_pk = Array(DIGEST_LEN)
     fors_verify(fors_indices, fors_pk)
-
     hypertree_verify(fors_pk, layer_leaf_indices, pk)
     return

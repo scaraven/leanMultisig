@@ -1,12 +1,14 @@
 use backend::*;
 use lean_vm::*;
+use sphincs::signers_cache::{NUM_SPHINCS_SIGNERS, get_sphincs_benchmark_signatures, message_for_sphincs_signer};
 use std::io::{self, Write};
 use std::time::Instant;
 use utils::ansi as s;
 use xmss::signers_cache::{BENCHMARK_SLOT, get_benchmark_signatures, message_for_benchmark};
 use xmss::{XmssPublicKey, XmssSignature};
 
-use crate::compilation::{get_aggregation_bytecode, init_aggregation_bytecode};
+use crate::compilation::{get_aggregation_bytecode, get_sphincs_bytecode, init_aggregation_bytecode, init_sphincs_bytecode};
+use crate::sphincs::{SphincsSignerInput, sphincs_aggregate, sphincs_verify_aggregation};
 use crate::{AggregatedXMSS, AggregationTopology, count_signers, xmss_aggregate};
 
 fn count_nodes(topology: &AggregationTopology) -> usize {
@@ -337,6 +339,91 @@ pub fn run_aggregation_benchmark(topology: &AggregationTopology, overlap: usize,
     )
     .unwrap();
     time
+}
+
+pub fn run_sphincs_benchmark(n_sigs: usize, log_inv_rate: usize, tracing: bool) -> f64 {
+    assert!(
+        n_sigs <= 4096,
+        "n_sigs={n_sigs} exceeds the supported maximum of 4096 SPHINCS+ signatures per proof"
+    );
+
+    if tracing {
+        utils::init_tracing();
+    }
+    precompute_dft_twiddles::<F>(1 << 24);
+
+    init_sphincs_bytecode();
+    println!(
+        "SPHINCS+ program: {} instructions\n",
+        pretty_integer(get_sphincs_bytecode().instructions.len())
+    );
+
+    let cache = get_sphincs_benchmark_signatures();
+    let signers: Vec<SphincsSignerInput> = (0..n_sigs)
+        .map(|i| {
+            let (pk, sig) = cache[i % NUM_SPHINCS_SIGNERS].clone();
+            SphincsSignerInput {
+                pubkey: pk,
+                sig,
+                message: message_for_sphincs_signer(i % NUM_SPHINCS_SIGNERS),
+            }
+        })
+        .collect();
+
+    // Build a degenerate 1-node LiveTree for display.
+    let inv_rate = 1 << log_inv_rate;
+    let plain_desc = format!("  ◇ {} R=1/{}", n_sigs, inv_rate);
+    let desc = format!(
+        "  {}◇{}  {}{}{}  {}R=1/{}{}",
+        s::ORG,
+        s::R,
+        s::GRN,
+        n_sigs,
+        s::R,
+        s::D,
+        inv_rate,
+        s::R
+    );
+    let plain_len = plain_desc.chars().count();
+    let mut display = LiveTree::new(vec![desc], vec![plain_len]);
+
+    if !tracing {
+        display.print_initial();
+    }
+
+    let time = Instant::now();
+    let agg = sphincs_aggregate(&signers, log_inv_rate);
+    let elapsed = time.elapsed().as_secs_f64();
+
+    if tracing {
+        println!("{}", agg.metadata.as_ref().unwrap().display());
+        println!("{:.0} sig/s", n_sigs as f64 / elapsed);
+        println!(
+            "Proof size: {} KiB",
+            agg.proof.proof_size_fe() * F::bits() / (8 * 1024)
+        );
+    } else {
+        let proof_kib = agg.proof.proof_size_fe() * F::bits() / (8 * 1024);
+        let meta = agg.metadata.as_ref().unwrap();
+        display.update_node(
+            0,
+            NodeStats {
+                time_secs: elapsed,
+                proof_kib,
+                cycles: meta.cycles,
+                memory: meta.memory,
+                poseidons: meta.n_poseidons,
+                dots: meta.n_extension_ops,
+                n_xmss: Some(n_sigs),
+            },
+        );
+    }
+
+    let pubkeys: Vec<_> = signers.iter().map(|s| s.pubkey.root()).collect();
+    let messages: Vec<_> = signers.iter().map(|s| s.message).collect();
+    sphincs_verify_aggregation(&pubkeys, &messages, &agg).unwrap();
+
+    elapsed
 }
 
 #[test]
