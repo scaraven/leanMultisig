@@ -54,8 +54,8 @@ def main():
     """
     n_sigs_chunk = Array(DIGEST_LEN)
     n_sigs_chunk[0] = n_sigs
-    for k in unroll(1, DIGEST_LEN):
-        n_sigs_chunk[k] = 0
+    set_to_7_zeros(n_sigs_chunk + 1)
+
     seg_nsigs = Array(DIGEST_LEN)
     poseidon16_compress(ZERO_VEC_PTR, n_sigs_chunk, seg_nsigs)
 
@@ -68,8 +68,7 @@ def main():
     commitment = Array(DIGEST_LEN)
     poseidon16_compress(h01, seg_messages, commitment)
 
-    for k in unroll(0, DIGEST_LEN):
-        assert commitment[k] == pub_mem[k]
+    copy_8(commitment, pub_mem)
 
     """
     Verify each signature independently. sphincs_verify consumes per-signer hints
