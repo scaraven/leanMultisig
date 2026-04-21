@@ -5,7 +5,8 @@ use lean_prover::verify_execution::{ProofVerificationDetails, verify_execution};
 use lean_vm::{DIGEST_LEN, ExecutionMetadata, ExecutionWitness, F};
 use serde::{Deserialize, Serialize};
 use sphincs::{
-    MESSAGE_LEN_FE, SPX_FORS_TREES, core::{SphincsPublicKey, SphincsSig, extract_digest_parts},
+    MESSAGE_LEN_FE, SPX_FORS_TREES,
+    core::{SphincsPublicKey, SphincsSig, extract_digest_parts},
     extract_fors_indices, fors_sig_to_flat,
 };
 use std::collections::HashMap;
@@ -60,7 +61,12 @@ pub fn sphincs_public_input(pubkeys: &[[F; DIGEST_LEN]], messages: &[[F; MESSAGE
 
 /// Append per-signer hints derived from a pre-computed signature.
 /// The secret key is not needed: all hint data comes from the sig and message.
-fn build_signer_hints(pubkey: &SphincsPublicKey, sig: &SphincsSig, message: &[F; MESSAGE_LEN_FE], hints: &mut HashMap<String, Vec<Vec<F>>>) {
+fn build_signer_hints(
+    pubkey: &SphincsPublicKey,
+    sig: &SphincsSig,
+    message: &[F; MESSAGE_LEN_FE],
+    hints: &mut HashMap<String, Vec<Vec<F>>>,
+) {
     let mut right = [F::ZERO; DIGEST_LEN];
     right[0] = message[8];
     let message_digest = poseidon16_compress_pair(&message[0..8].try_into().unwrap(), &right);
@@ -74,11 +80,26 @@ fn build_signer_hints(pubkey: &SphincsPublicKey, sig: &SphincsSig, message: &[F;
     digest_decomposition.extend(fors_indices.iter().map(|&i| F::from_usize(i)));
     digest_decomposition.push(F::from_usize(fe5_upper));
 
-    hints.entry("digest_decomposition".to_string()).or_default().push(digest_decomposition);
-    hints.entry("fors_sig".to_string()).or_default().push(fors_sig_to_flat(&sig.fors_sig));
-    hints.entry("hypertree_sig".to_string()).or_default().push(sig.hypertree_sig.flatten_hypertree_sig());
-    hints.entry("fe0_unused_bits".to_string()).or_default().push(vec![F::from_usize(fe0_unused)]);
-    hints.entry("fe1_unused_bits".to_string()).or_default().push(vec![F::from_usize(fe1_unused)]);
+    hints
+        .entry("digest_decomposition".to_string())
+        .or_default()
+        .push(digest_decomposition);
+    hints
+        .entry("fors_sig".to_string())
+        .or_default()
+        .push(fors_sig_to_flat(&sig.fors_sig));
+    hints
+        .entry("hypertree_sig".to_string())
+        .or_default()
+        .push(sig.hypertree_sig.flatten_hypertree_sig());
+    hints
+        .entry("fe0_unused_bits".to_string())
+        .or_default()
+        .push(vec![F::from_usize(fe0_unused)]);
+    hints
+        .entry("fe1_unused_bits".to_string())
+        .or_default()
+        .push(vec![F::from_usize(fe1_unused)]);
 
     // Suppress unused variable warning — pubkey is passed for API clarity and future use
     // (e.g. if we need to cross-check pk against the sig's embedded public key).

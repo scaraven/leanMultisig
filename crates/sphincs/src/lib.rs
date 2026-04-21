@@ -1,9 +1,9 @@
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 
+pub mod core;
 pub mod fors;
 pub mod hypertree;
 pub mod signers_cache;
-pub mod core;
 pub mod wots;
 
 pub use fors::*;

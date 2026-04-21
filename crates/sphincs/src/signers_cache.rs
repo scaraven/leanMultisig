@@ -1,6 +1,6 @@
 use backend::{IntoParallelRefIterator, PrimeField32};
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use rand::{RngExt, SeedableRng, rngs::StdRng};
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
 use sha3::{Digest as Sha3Digest, Sha3_256};
 use std::fs;
@@ -9,7 +9,10 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
-use crate::{F, MESSAGE_LEN_FE, core::{SphincsPublicKey, SphincsSecretKey, SphincsSig}};
+use crate::{
+    F, MESSAGE_LEN_FE,
+    core::{SphincsPublicKey, SphincsSecretKey, SphincsSig},
+};
 
 pub const NUM_SPHINCS_SIGNERS: usize = 500;
 
@@ -110,7 +113,9 @@ fn gen_benchmark_signers_cache() -> Vec<(SphincsPublicKey, SphincsSig)> {
     signers.push(first_signer);
     signers.extend(rest);
 
-    let cache_file = SignersCacheFile { signatures: signers.clone() };
+    let cache_file = SignersCacheFile {
+        signatures: signers.clone(),
+    };
     let encoded = postcard::to_allocvec(&cache_file).expect("postcard serialization failed");
     let compressed = lz4_flex::compress_prepend_size(&encoded);
     if let Some(parent) = path.parent() {
