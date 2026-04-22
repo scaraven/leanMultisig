@@ -4,7 +4,7 @@ from hashing import *
 # SPHINCS+ Parameters
 SPX_WOTS_LEN    = 32   # V  — chains per WOTS instance
 SPX_WOTS_W      = 16   # CHAIN_LENGTH
-TARGET_SUM      = 240  # sum of all 32 encoding indices
+TARGET_SUM      = 304  # sum of all 32 encoding indices
 SPX_D           = 3    # hypertree layers
 SPX_TREE_HEIGHT = 11   # leaves per hypertree layer = 2^11
 SPX_FORS_HEIGHT = 15   # leaves per FORS tree = 2^15

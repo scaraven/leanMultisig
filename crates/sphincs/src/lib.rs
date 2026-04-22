@@ -30,8 +30,8 @@ pub const SPX_FORS_TREES: usize = 9;
 pub const SPX_WOTS_W: usize = 16;
 pub const SPX_WOTS_LOGW: usize = 4; // log2(SPX_WOTS_W)
 pub const SPX_WOTS_LEN: usize = 32; // 8 * N / LOGW = 8 * 16 / 4
-pub const TARGET_SUM: usize = 240; // fixed sum of all 32 encoding indices
-pub const NUM_CHAIN_HASHES: usize = 240; // V*(w-1) - TARGET_SUM = 32*15 - 240
+pub const TARGET_SUM: usize = 304; // fixed sum of all 32 encoding indices
+pub const NUM_CHAIN_HASHES: usize = 176; // V*(w-1) - TARGET_SUM = 32*15 - 304
 pub const V_GRINDING: usize = 0;
 
 // --- Lifetime / key material ---
