@@ -24,7 +24,8 @@ def main():
     local_zero_buf = Array(DIGEST_LEN)
     set_to_8_zeros(local_zero_buf)
 
-    wots_pubkey = wots_encode_and_complete(message, layer_index, randomness, chain_tips, local_zero_buf)
+    wots_pubkey = Array(DIGEST_LEN)
+    wots_encode_and_complete(message, layer_index, randomness, chain_tips, local_zero_buf, wots_pubkey)
     for i in unroll(0, DIGEST_LEN):
         assert wots_pubkey[i] == expected_wots_pubkey[i]
     return

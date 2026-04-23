@@ -19,7 +19,7 @@ def main():
     expected_root = Array(DIGEST_LEN)
     hint_witness("expected_root", expected_root)
 
-    out = hypertree_merkle_verify(layer_leaf_index, leaf_node, auth_path)
-    for i in unroll(0, DIGEST_LEN):
-        assert out[i] == expected_root[i]
+    out = Array(DIGEST_LEN)
+    hypertree_merkle_verify(layer_leaf_index, leaf_node, auth_path, out)
+    copy_8(out, expected_root)
     return
