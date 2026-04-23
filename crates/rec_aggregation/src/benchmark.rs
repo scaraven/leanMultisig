@@ -7,7 +7,9 @@ use utils::ansi as s;
 use xmss::signers_cache::{BENCHMARK_SLOT, get_benchmark_signatures, message_for_benchmark};
 use xmss::{XmssPublicKey, XmssSignature};
 
-use crate::compilation::{get_aggregation_bytecode, get_sphincs_bytecode, init_aggregation_bytecode, init_sphincs_bytecode};
+use crate::compilation::{
+    get_aggregation_bytecode, get_sphincs_bytecode, init_aggregation_bytecode, init_sphincs_bytecode,
+};
 use crate::sphincs::{SphincsSignerInput, sphincs_aggregate, sphincs_verify_aggregation};
 use crate::{AggregatedXMSS, AggregationTopology, count_signers, xmss_aggregate};
 
@@ -398,10 +400,7 @@ pub fn run_sphincs_benchmark(n_sigs: usize, log_inv_rate: usize, tracing: bool) 
     if tracing {
         println!("{}", agg.metadata.as_ref().unwrap().display());
         println!("{:.0} sig/s", n_sigs as f64 / elapsed);
-        println!(
-            "Proof size: {} KiB",
-            agg.proof.proof_size_fe() * F::bits() / (8 * 1024)
-        );
+        println!("Proof size: {} KiB", agg.proof.proof_size_fe() * F::bits() / (8 * 1024));
     } else {
         let proof_kib = agg.proof.proof_size_fe() * F::bits() / (8 * 1024);
         let meta = agg.metadata.as_ref().unwrap();

@@ -24,23 +24,31 @@ def hypertree_merkle_verify(layer_leaf_index, leaf_node, auth_path, root_out):
 
     bits = Array(SPX_TREE_HEIGHT)
     hint_decompose_bits(layer_leaf_index, bits, SPX_TREE_HEIGHT, LITTLE_ENDIAN)
-        
-    reconstructed: Mut = 0
-    intermediate_states = Array((SPX_TREE_HEIGHT + 1) * DIGEST_LEN)
-    copy_8(leaf_node, intermediate_states)  # level 0 node is the leaf_node
 
     for i in unroll(0, SPX_TREE_HEIGHT):
         # Constrain bits[i] to {0, 1} and verify reconstruction matches layer_leaf_index.
-        reconstructed += bits[i] * 2**i
         assert bits[i] * (1 - bits[i]) == 0
 
-        if bits[i] == 0:
-            poseidon16_compress(intermediate_states + i * DIGEST_LEN, auth_path + i * DIGEST_LEN, intermediate_states + (i + 1) * DIGEST_LEN)
-        else:
-            poseidon16_compress(auth_path + i * DIGEST_LEN, intermediate_states + i * DIGEST_LEN, intermediate_states + (i + 1) * DIGEST_LEN)
-    
+    reconstructed: Mut = bits[0]
+    for i in unroll(1, SPX_TREE_HEIGHT):
+        reconstructed += bits[i] * 2**i
     assert layer_leaf_index == reconstructed
-    copy_8(intermediate_states + SPX_TREE_HEIGHT * DIGEST_LEN, root_out)
+    
+    # Walk the auth path from the leaf node up to the root, applying poseidon16_compress
+    intermediate_states = Array((SPX_TREE_HEIGHT - 1) * DIGEST_LEN)
+    if bits[0] == 0:
+        poseidon16_compress(leaf_node, auth_path, intermediate_states)
+    else:
+        poseidon16_compress(auth_path, leaf_node, intermediate_states)
+    for i in unroll(1, SPX_TREE_HEIGHT - 1):
+        if bits[i] == 0:
+            poseidon16_compress(intermediate_states + (i - 1) * DIGEST_LEN, auth_path + i * DIGEST_LEN, intermediate_states + i * DIGEST_LEN)
+        else:
+            poseidon16_compress(auth_path + i * DIGEST_LEN, intermediate_states + (i - 1) * DIGEST_LEN, intermediate_states + i * DIGEST_LEN)
+    if bits[SPX_TREE_HEIGHT - 1] == 0:
+        poseidon16_compress(intermediate_states + (SPX_TREE_HEIGHT - 2) * DIGEST_LEN, auth_path + (SPX_TREE_HEIGHT - 1) * DIGEST_LEN, root_out)
+    else:
+        poseidon16_compress(auth_path + (SPX_TREE_HEIGHT - 1) * DIGEST_LEN, intermediate_states + (SPX_TREE_HEIGHT - 2) * DIGEST_LEN, root_out)
     return
 
 @inline

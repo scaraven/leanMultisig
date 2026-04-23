@@ -21,8 +21,7 @@ def fors_merkle_verify(leaf_index, leaf_node, auth_path, out):
     # Precondition: leaf_index < 2^SPX_FORS_HEIGHT
     debug_assert(leaf_index < 2**SPX_FORS_HEIGHT)
 
-    leaf_node_arr = Array(DIGEST_LEN * (1 + SPX_FORS_HEIGHT / MERKLE_LEVEL_STEP))
-    copy_8(leaf_node, leaf_node_arr)
+    leaf_node_arr = Array(DIGEST_LEN * (SPX_FORS_HEIGHT / MERKLE_LEVEL_STEP - 1))
 
     bits = Array(SPX_FORS_HEIGHT)
     hint_decompose_bits(leaf_index, bits, SPX_FORS_HEIGHT, LITTLE_ENDIAN)
@@ -35,10 +34,13 @@ def fors_merkle_verify(leaf_index, leaf_node, auth_path, out):
         reconstructed += bits[i] * 2**i
     assert leaf_index == reconstructed
 
-    for i in unroll(0, SPX_FORS_HEIGHT / MERKLE_LEVEL_STEP):
-        do_5_merkle_level(bits + i * MERKLE_LEVEL_STEP, leaf_node_arr + i * DIGEST_LEN, 
-                          auth_path + MERKLE_LEVEL_STEP * i * DIGEST_LEN, leaf_node_arr + (i + 1) * DIGEST_LEN)        
-    copy_8(leaf_node_arr + SPX_FORS_HEIGHT / MERKLE_LEVEL_STEP * DIGEST_LEN, out)
+    do_5_merkle_level(bits, leaf_node, auth_path, leaf_node_arr)
+    for i in unroll(1, SPX_FORS_HEIGHT / MERKLE_LEVEL_STEP - 1):
+        do_5_merkle_level(bits + i * MERKLE_LEVEL_STEP, leaf_node_arr + (i - 1) * DIGEST_LEN, 
+                          auth_path + MERKLE_LEVEL_STEP * i * DIGEST_LEN, leaf_node_arr + i * DIGEST_LEN)        
+    
+    do_5_merkle_level(bits + (SPX_FORS_HEIGHT / MERKLE_LEVEL_STEP - 1) * MERKLE_LEVEL_STEP, leaf_node_arr + (SPX_FORS_HEIGHT / MERKLE_LEVEL_STEP - 2) * DIGEST_LEN,
+                      auth_path + MERKLE_LEVEL_STEP * (SPX_FORS_HEIGHT / MERKLE_LEVEL_STEP - 1) * DIGEST_LEN, out)
     return
 
 @inline

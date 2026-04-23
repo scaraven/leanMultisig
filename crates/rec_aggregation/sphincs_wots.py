@@ -40,8 +40,7 @@ def wots_encode_and_complete(message, layer_index, randomness, chain_tips, local
     #   A = poseidon(message, [randomness[0..7], 0])
     #   B = poseidon(A, [layer_index, 0, ..., 0])
     a_right = Array(DIGEST_LEN)
-    for i in unroll(0, RANDOMNESS_LEN):
-        a_right[i] = randomness[i]
+    copy_7(a_right, randomness)
     a_right[RANDOMNESS_LEN] = 0  # zero-pad the 8th element
 
     b_input = Array(DIGEST_LEN * 2)

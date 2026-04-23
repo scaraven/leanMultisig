@@ -79,6 +79,23 @@ fn build_sphincs_hints(seed: [u8; 20], message: [F; MESSAGE_LEN_FE]) -> HashMap<
 }
 
 #[test]
+fn profile_sphincs_verify() {
+    let path = format!("{}/tests/test_sphincs_aggregate.py", env!("CARGO_MANIFEST_DIR"));
+    let bytecode = compile_program(&ProgramSource::Filepath(path));
+
+    let seed = [7u8; 20];
+    let message = [F::from_usize(0); MESSAGE_LEN_FE];
+    let hints = build_sphincs_hints(seed, message);
+    let witness = ExecutionWitness {
+        preamble_memory_len: PREAMBLE_MEMORY_LEN,
+        hints,
+    };
+
+    let result = execute_bytecode(&bytecode, &vec![F::from_usize(0); DIGEST_LEN], &witness, true);
+    println!("{}", result.metadata.display());
+}
+
+#[test]
 fn test_sphincs_aggregate_verify() {
     let path = format!("{}/tests/test_sphincs_aggregate.py", env!("CARGO_MANIFEST_DIR"));
     let bytecode = compile_program(&ProgramSource::Filepath(path));
