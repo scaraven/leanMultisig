@@ -3,7 +3,8 @@ from sphincs_utils import *
 from sphincs_wots import *
 
 
-def hypertree_merkle_verify(layer_leaf_index, leaf_node, auth_path):
+@inline
+def hypertree_merkle_verify(layer_leaf_index, leaf_node, auth_path, root_out):
     # Verify a single SPX_TREE_HEIGHT (11)-level binary Merkle auth path within one
     # hypertree layer. Structure identical to fors_merkle_verify but for 11 levels.
     #
@@ -39,7 +40,8 @@ def hypertree_merkle_verify(layer_leaf_index, leaf_node, auth_path):
             poseidon16_compress(auth_path + i * DIGEST_LEN, intermediate_states + i * DIGEST_LEN, intermediate_states + (i + 1) * DIGEST_LEN)
     
     assert layer_leaf_index == reconstructed
-    return intermediate_states + SPX_TREE_HEIGHT * DIGEST_LEN
+    copy_8(intermediate_states + SPX_TREE_HEIGHT * DIGEST_LEN, root_out)
+    return
 
 @inline
 def hypertree_verify(fors_pubkey, layer_leaf_indices, expected_pk):
@@ -97,7 +99,8 @@ def hypertree_verify(fors_pubkey, layer_leaf_indices, expected_pk):
         if l < SPX_D - 1:
             # Intermediate layer: walk the auth path to get the layer root, then hash it
             # with domain separator [l+1, 0, ..., 0] to produce the next layer's message.
-            layer_root = hypertree_merkle_verify(layer_leaf_indices[l], wots_leaf, auth_path_ptr)
+            layer_root = Array(DIGEST_LEN)
+            hypertree_merkle_verify(layer_leaf_indices[l], wots_leaf, auth_path_ptr, layer_root)
 
             domain_sep = Array(DIGEST_LEN)
             domain_sep[0] = l + 1
@@ -105,6 +108,5 @@ def hypertree_verify(fors_pubkey, layer_leaf_indices, expected_pk):
             poseidon16_compress(layer_root, domain_sep, messages + (l + 1) * DIGEST_LEN)
         else:
             # Final layer: walk the auth path and assert the computed root equals expected_pk.
-            final_root = hypertree_merkle_verify(layer_leaf_indices[l], wots_leaf, auth_path_ptr)
-            copy_8(final_root, expected_pk)  # assert final_root == expected_pk
+            hypertree_merkle_verify(layer_leaf_indices[l], wots_leaf, auth_path_ptr, expected_pk)
     return
