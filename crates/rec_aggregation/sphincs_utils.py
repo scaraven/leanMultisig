@@ -73,21 +73,18 @@ def do_5_merkle_level(bits, state_in, sibling, state_out):
 
     return
 
-def _iterate_hash_const(input, k: Const, output, local_zero_buf):
-    # Fixed-footprint specialization: every k uses the same buffer size and
-    # unroll bounds so frame size is uniform across match_range arms.
-    states = Array(SPX_WOTS_W * DIGEST_LEN)
-    copy_8(input, states)
-
-    for i in unroll(0, SPX_WOTS_W - 1):
-        curr = states + i * DIGEST_LEN
-        nxt = states + (i + 1) * DIGEST_LEN
-        if i < k:
-            poseidon16_compress(curr, local_zero_buf, nxt)
-        else:
-            copy_8(curr, nxt)
-
-    copy_8(states + k * DIGEST_LEN, output)
+@inline
+def _iterate_hash_const(input, k, output, local_zero_buf):
+    if k == 0:
+        copy_8(input, output)
+    elif k == 1:
+        poseidon16_compress(input, local_zero_buf, output)
+    else:
+        states = Array((k - 1) * DIGEST_LEN)
+        poseidon16_compress(input, local_zero_buf, states)
+        for i in unroll(1, k - 1):
+            poseidon16_compress(states + (i - 1) * DIGEST_LEN, local_zero_buf, states + i * DIGEST_LEN)
+        poseidon16_compress(states + (k - 2) * DIGEST_LEN, local_zero_buf, output)
     return
 
 
