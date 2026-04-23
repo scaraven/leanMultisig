@@ -264,8 +264,7 @@ fn test_sphincs_fors_verify() {
         let seed: [u8; 20] = rng.random();
 
         let (fors_sk, fors_pk) = fors_key_gen(seed);
-        let leaf_indices: [usize; SPX_FORS_TREES] =
-            std::array::from_fn(|_| rng.random_range(..(1 << SPX_FORS_HEIGHT)));
+        let leaf_indices: [usize; SPX_FORS_TREES] = std::array::from_fn(|_| rng.random_range(..(1 << SPX_FORS_HEIGHT)));
         let root = fors_pk.0;
 
         let sig = fors_sign(&fors_sk, &leaf_indices);
