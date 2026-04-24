@@ -9,11 +9,11 @@ SPX_D           = 3    # hypertree layers
 SPX_TREE_HEIGHT = 11   # leaves per hypertree layer = 2^11
 SPX_FORS_HEIGHT = 15   # leaves per FORS tree = 2^15
 SPX_FORS_TREES  = 9    # k — number of FORS trees
-RANDOMNESS_LEN  = 7    # FEs per WOTS randomness value
+RANDOMNESS_LEN  = 8    # FEs per WOTS randomness value (7 random FEs + layer_index in slot 7)
 MESSAGE_LEN     = 9    # FEs per message
 
 FORS_SIG_SIZE_FE      = SPX_FORS_TREES * (1 + SPX_FORS_HEIGHT) * DIGEST_LEN        # 1152
-HYPERTREE_SIG_SIZE_FE = SPX_D * (RANDOMNESS_LEN + SPX_WOTS_LEN * DIGEST_LEN + SPX_TREE_HEIGHT * DIGEST_LEN)  # 1053
+HYPERTREE_SIG_SIZE_FE = SPX_D * (RANDOMNESS_LEN + SPX_WOTS_LEN * DIGEST_LEN + SPX_TREE_HEIGHT * DIGEST_LEN)  # 1056
 
 MERKLE_LEVEL_STEP = 5 # number of Merkle levels processed by do_3_merkle_level; must divide SPX_FORS_HEIGHT
 

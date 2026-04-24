@@ -92,7 +92,7 @@ def hypertree_verify(fors_pubkey, layer_leaf_indices, expected_pk):
 
     for l in unroll(0, SPX_D):
         # Per-layer layout in hypertree_sig:
-        #   randomness:  RANDOMNESS_LEN (7) FEs
+        #   randomness:  RANDOMNESS_LEN (8) FEs  [r0..r6, layer_index]
         #   chain_tips:  SPX_WOTS_LEN * DIGEST_LEN (256) FEs
         #   auth_path:   SPX_TREE_HEIGHT * DIGEST_LEN (88) FEs
         layer_offset = l * (RANDOMNESS_LEN + (SPX_WOTS_LEN + SPX_TREE_HEIGHT) * DIGEST_LEN)

@@ -68,7 +68,7 @@ fn test_chain_hash_sphincs() {
 }
 
 /// Build hints for test_sphincs_wots.py:
-///   "message" (8) | "layer_index" (1) | "randomness" (7) | "chain_tips" (32*8) | "expected" (8)
+///   "message" (8) | "layer_index" (1) | "randomness" (8: 7 random + layer_index) | "chain_tips" (32*8) | "expected" (8)
 fn build_wots_hints(
     message: &[F; DIGEST_LEN],
     layer_index: u32,
@@ -76,13 +76,15 @@ fn build_wots_hints(
     chain_tips: &[[F; DIGEST_LEN]; SPX_WOTS_LEN],
     expected_pubkey: &[F; DIGEST_LEN],
 ) -> HashMap<String, Vec<Vec<F>>> {
+    let mut randomness_with_layer = randomness.to_vec();
+    randomness_with_layer.push(F::from_usize(layer_index as usize));
     HashMap::from([
         ("message".to_string(), vec![message.to_vec()]),
         (
             "layer_index".to_string(),
             vec![vec![F::from_usize(layer_index as usize)]],
         ),
-        ("randomness".to_string(), vec![randomness.to_vec()]),
+        ("randomness".to_string(), vec![randomness_with_layer]),
         (
             "chain_tips".to_string(),
             vec![chain_tips.iter().flatten().copied().collect()],

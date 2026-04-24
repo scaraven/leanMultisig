@@ -75,7 +75,7 @@ fn build_sphincs_hints(seed: [u8; 20], message: [F; MESSAGE_LEN_FE]) -> HashMap<
     let fors_sig_flat = fors_sig_to_flat(&sig.fors_sig);
     let hypertree_sig_flat = sig.hypertree_sig.flatten_hypertree_sig();
 
-    let expected_hypertree_len = SPX_D * (RANDOMNESS_LEN_FE + (SPX_WOTS_LEN + SPX_TREE_HEIGHT) * DIGEST_LEN);
+    let expected_hypertree_len = SPX_D * ((RANDOMNESS_LEN_FE + 1) + (SPX_WOTS_LEN + SPX_TREE_HEIGHT) * DIGEST_LEN);
     assert_eq!(hypertree_sig_flat.len(), expected_hypertree_len);
 
     HashMap::from([
