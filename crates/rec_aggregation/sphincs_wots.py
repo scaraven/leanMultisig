@@ -9,10 +9,7 @@ def wots_encode_and_complete(message, layer_index, randomness, chain_tips, local
     #
     # Steps:
     #   1. Compute encoding:
-    #        a_right = [randomness[0..7], 0]  (8 FEs)
-    #        A = poseidon(message, a_right)
-    #        b_right = [layer_index, 0, 0, 0, 0, 0, 0, 0]
-    #        B = poseidon(A, b_right)
+    #        encoding_fe = poseidon(message, [randomness[0..7], layer_index])
     #   2. Decompose B into SPX_WOTS_LEN (32) 4-bit encoding indices via hint:
     #        extract 6 chunks of 4 bits each from bits 0–23 of each of B's 8 FEs (LE),
     #        take the first 32 chunks as encoding[0..32].
@@ -37,19 +34,13 @@ def wots_encode_and_complete(message, layer_index, randomness, chain_tips, local
     debug_assert(layer_index < SPX_D)
 
     # Step 1: compute encoding field elements
-    #   A = poseidon(message, [randomness[0..7], 0])
-    #   B = poseidon(A, [layer_index, 0, ..., 0])
+    #   encoding_fe = poseidon(message, [randomness[0..7], layer_index])
     a_right = Array(DIGEST_LEN)
     copy_7(a_right, randomness)
-    a_right[RANDOMNESS_LEN] = 0  # zero-pad the 8th element
+    a_right[RANDOMNESS_LEN] = layer_index
 
-    b_input = Array(DIGEST_LEN * 2)
-    poseidon16_compress(message, a_right, b_input)
-
-    b_input[8] = layer_index
-    set_to_7_zeros(b_input + 9) # zero-pad the last 7 elements
     encoding_fe = Array(DIGEST_LEN)
-    poseidon16_compress(b_input, b_input + 8, encoding_fe)
+    poseidon16_compress(message, a_right, encoding_fe)
 
     # Step 2: decompose first 6 FEs of encoding_fe into 4-bit chunks via hint
     # 24 usable bits / 4 bits per chunk = 6 chunks per FE
@@ -74,8 +65,8 @@ def wots_encode_and_complete(message, layer_index, randomness, chain_tips, local
         assert partial_sum == encoding_fe[i]
 
     # Verify TARGET_SUM over the 32 encoding indices
-    target_sum: Mut = 0
-    for i in unroll(0, SPX_WOTS_LEN):
+    target_sum: Mut = encoding[0]
+    for i in unroll(1, SPX_WOTS_LEN):
         target_sum += encoding[i]
     assert target_sum == TARGET_SUM
 

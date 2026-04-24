@@ -106,21 +106,16 @@ pub fn find_randomness_for_wots_encoding(
 ///
 /// Note: `message` must be a Digest (8 FEs). Hash external messages before calling.
 ///
-/// A = poseidon(message[0..8] | [randomness[0..7], 0])
-/// B = poseidon(A | [layer_index, 0, 0, 0, 0, 0, 0, 0])
+/// encoding_fe = poseidon(message[0..8] | [randomness[0..7], layer_index])
 ///
-/// Extract 4-bit chunks from B (24 bits per element, little-endian), take first 32.
+/// Extract 4-bit chunks from encoding_fe (24 bits per element, little-endian), take first 32.
 /// Valid iff sum of indices == TARGET_SUM.
 pub fn wots_encode(message: &Digest, layer_index: u32, randomness: &[F; RANDOMNESS_LEN_FE]) -> Option<[u8; V]> {
-    // A = poseidon(message (8 fe), randomness (7 fe) + 1 zero pad)
-    let mut a_input_right = [F::default(); 8];
-    a_input_right[..RANDOMNESS_LEN_FE].copy_from_slice(randomness);
-    let a = poseidon16_compress_pair(message, &a_input_right);
-
-    // B = poseidon(A (8 fe), [layer_index, 0, 0, 0, 0, 0, 0, 0])
-    let mut b_input_right = [F::default(); 8];
-    b_input_right[0] = F::from_usize(layer_index as usize);
-    let compressed = poseidon16_compress_pair(&a, &b_input_right);
+    // encoding_fe = poseidon(message (8 fe), randomness (7 fe) + layer_index)
+    let mut input_right = [F::default(); 8];
+    input_right[..RANDOMNESS_LEN_FE].copy_from_slice(randomness);
+    input_right[RANDOMNESS_LEN_FE] = F::from_usize(layer_index as usize);
+    let compressed = poseidon16_compress_pair(message, &input_right);
 
     if compressed.iter().any(|&kb| kb == -F::ONE) {
         return None;
