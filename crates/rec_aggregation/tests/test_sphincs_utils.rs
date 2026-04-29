@@ -4,8 +4,8 @@ use lean_vm::*;
 use rand::{RngExt, SeedableRng, rngs::StdRng};
 use rec_aggregation::PREAMBLE_MEMORY_LEN;
 use sphincs::{
-    RANDOMNESS_LEN_FE, SPX_FORS_HEIGHT, SPX_FORS_TREES, SPX_TREE_HEIGHT, SPX_WOTS_LEN, SPX_WOTS_W,
-    extract_fors_indices, fold_roots, fors_key_gen, fors_sig_to_flat, fors_sign, fors_sign_single_tree,
+    RANDOMNESS_LEN_FE, SPX_FORS_HEIGHT, SPX_FORS_TREES, SPX_WOTS_LEN, SPX_WOTS_W, fold_roots, fors_key_gen,
+    fors_sig_to_flat, fors_sign, fors_sign_single_tree,
     wots::{WotsPublicKey, find_randomness_for_wots_encoding, iterate_hash, wots_encode},
 };
 use std::collections::HashMap;
@@ -318,30 +318,30 @@ fn test_decompose_message_digest() {
         let bytecode = compile_program(&ProgramSource::Filepath(path));
 
         let mut rng = StdRng::seed_from_u64(42);
-        let tree_mask = (1usize << SPX_TREE_HEIGHT) - 1;
 
         for _ in 0..10 {
             let message_digest: [F; DIGEST_LEN] = rng.random();
 
-            let (leaf_idx, tree_address, mhash, fe5_upper, fe0_unused, fe1_unused) =
+            let (leaf_indices, fors_indices, leaf_uppers, fors_uppers) =
                 sphincs::core::extract_digest_parts(&message_digest);
-            let fors_indices = extract_fors_indices(&mhash);
 
-            let mut digest_decomposition = Vec::with_capacity(2 + SPX_FORS_TREES + 1);
-            digest_decomposition.push(F::from_usize(leaf_idx));
-            digest_decomposition.push(F::from_usize(tree_address));
-            digest_decomposition.extend(fors_indices.iter().map(|&i| F::from_usize(i)));
-            digest_decomposition.push(F::from_usize(fe5_upper));
+            let digest_indices: Vec<F> = leaf_indices
+                .iter()
+                .chain(fors_indices.iter())
+                .map(|&i| F::from_usize(i))
+                .collect();
+            let digest_uppers: Vec<F> = leaf_uppers
+                .iter()
+                .chain(fors_uppers.iter())
+                .map(|&u| F::from_usize(u))
+                .collect();
 
-            let layer_leaf_indices = [
-                leaf_idx,
-                tree_address & tree_mask,
-                (tree_address >> SPX_TREE_HEIGHT) & tree_mask,
-            ];
+            let layer_leaf_indices = [leaf_indices[0], leaf_indices[1], leaf_indices[2]];
 
             let hints = HashMap::from([
                 ("message_digest".to_string(), vec![message_digest.to_vec()]),
-                ("digest_decomposition".to_string(), vec![digest_decomposition]),
+                ("digest_indices".to_string(), vec![digest_indices]),
+                ("digest_uppers".to_string(), vec![digest_uppers]),
                 (
                     "expected_fors_indices".to_string(),
                     vec![fors_indices.iter().map(|&i| F::from_usize(i)).collect()],
@@ -350,8 +350,6 @@ fn test_decompose_message_digest() {
                     "expected_layer_leaf_indices".to_string(),
                     vec![layer_leaf_indices.iter().map(|&i| F::from_usize(i)).collect::<Vec<_>>()],
                 ),
-                ("fe0_unused_bits".to_string(), vec![vec![F::from_usize(fe0_unused)]]),
-                ("fe1_unused_bits".to_string(), vec![vec![F::from_usize(fe1_unused)]]),
             ]);
 
             let witness = ExecutionWitness {

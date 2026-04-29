@@ -37,8 +37,6 @@ def wots_encode_and_complete(message, layer_index, randomness, chain_tips, local
     # Step 1: compute encoding field elements
     #   encoding_fe = poseidon(message, randomness)
     #   where randomness = [r0..r6, layer_index] — slot 7 holds layer_index (asserted below)
-    print(randomness[7])
-    print(layer_index)
     assert randomness[RANDOMNESS_LEN - 1] == layer_index
 
     encoding_fe = Array(DIGEST_LEN)

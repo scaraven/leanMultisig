@@ -1,13 +1,20 @@
-use backend::PrimeField32;
+use backend::{PrimeCharacteristicRing, PrimeField32};
 use serde::{Deserialize, Serialize};
 use utils::poseidon16_compress_pair;
 
 use crate::fors::ForsSignature;
 use crate::hypertree::HypertreeSignature;
 use crate::{
-    DIGEST_SIZE, Digest, F, ForsPublicKey, ForsSecretKey, HypertreeSecretKey, MESSAGE_LEN_FE, SPX_FORS_MSG_BYTES,
-    SPX_LEAF_BITS, SPX_TREE_BITS, SPX_TREE_HEIGHT, fors, hypertree,
+    DIGEST_SIZE, Digest, F, ForsPublicKey, ForsSecretKey, HypertreeSecretKey, MESSAGE_LEN_FE, SPX_FORS_HEIGHT,
+    SPX_FORS_TREES, SPX_TREE_HEIGHT, fors, hypertree,
 };
+
+// poseidon hash of hex("message_input_extend") reduced mod KB_PRIME
+fn digest_expand_domain_sep() -> Digest {
+    let mut d = [F::ZERO; DIGEST_SIZE];
+    d[0] = F::new(1298655175);
+    d
+}
 
 #[derive(Debug)]
 pub struct SphincsSecretKey {
@@ -48,9 +55,8 @@ impl SphincsSecretKey {
         right[0] = message[8];
         let message_digest = poseidon16_compress_pair(&message[0..8].try_into().unwrap(), &right);
 
-        let (leaf_idx, tree_address, mhash) = extract_digest_hash(&message_digest)?;
+        let (leaf_idx, tree_address, fors_indices) = extract_digest_hash(&message_digest);
 
-        let fors_indices = fors::extract_fors_indices(&mhash);
         let fors_sig = fors::fors_sign(&self.into(), &fors_indices);
 
         let fors_pk = self.fors_pk();
@@ -88,73 +94,85 @@ pub struct SphincsSig {
     pub hypertree_sig: HypertreeSignature,
 }
 
-/// Extract the leaf_index, tree address and mhash values from the message digest.
+/// Expand the message digest into indices using two domain-separated Poseidon calls.
 ///
-/// The digest (8 field elements) is serialised as 8 consecutive little-endian
-/// u32 values (32 bytes total). The bit layout within that byte buffer is:
+/// Call A: poseidon([DS,   0, ..], message_digest) → expanded_a[8]
+///   expanded_a[0] bits 0..10 → leaf_idx   (11 bits)
+///   expanded_a[1] bits 0..10 → lli1       (lower 11 bits of tree_address)
+///   expanded_a[2] bits 0..10 → lli2       (upper 11 bits of tree_address)
+///   expanded_a[3..7] bits 0..14 → fors_indices[0..4]  (15 bits each)
 ///
-///   bits  0  .. 10  : leaf_idx      (SPX_TREE_HEIGHT = 11 bits)
-///   bits 11  .. 15  : unused
-///   bits 16  .. 37  : tree_address  (SPX_FULL_HEIGHT - SPX_TREE_HEIGHT = 22 bits)
-///   bits 38  .. 39  : unused
-///   bits 40  .. 175 : mhash         (SPX_FORS_MSG_BYTES = 17 bytes = 136 bits)
-fn extract_digest_hash(
-    digest: &Digest,
-) -> Result<(usize, usize, [u8; SPX_FORS_MSG_BYTES]), Box<dyn std::error::Error>> {
-    // Serialise the digest into a flat 32-byte buffer (8 × LE u32).
-    let mut buf = [0u8; 32];
-    for (i, fe) in digest.iter().enumerate() {
-        buf[i * 4..][..4].copy_from_slice(&fe.as_canonical_u32().to_le_bytes());
+/// Call B: poseidon([DS+1, 0, ..], message_digest) → expanded_b[8]
+///   expanded_b[0..3] bits 0..14 → fors_indices[5..8]  (15 bits each)
+///
+/// tree_address = lli1 | (lli2 << SPX_TREE_HEIGHT)
+fn extract_digest_hash(digest: &Digest) -> (usize, usize, [usize; SPX_FORS_TREES]) {
+    let (expanded_a, expanded_b) = expand_digest(digest);
+    let leaf_mask = (1usize << SPX_TREE_HEIGHT) - 1;
+    let fors_mask = (1usize << SPX_FORS_HEIGHT) - 1;
+
+    let leaf_idx = expanded_a[0].as_canonical_u32() as usize & leaf_mask;
+    let lli1 = expanded_a[1].as_canonical_u32() as usize & leaf_mask;
+    let lli2 = expanded_a[2].as_canonical_u32() as usize & leaf_mask;
+    let tree_address = lli1 | (lli2 << SPX_TREE_HEIGHT);
+
+    let mut fors_indices = [0usize; SPX_FORS_TREES];
+    for t in 0..5 {
+        fors_indices[t] = expanded_a[3 + t].as_canonical_u32() as usize & fors_mask;
+    }
+    for t in 0..4 {
+        fors_indices[5 + t] = expanded_b[t].as_canonical_u32() as usize & fors_mask;
     }
 
-    // --- leaf_idx: bits 0..10 (11 bits) ---
-    let leaf_idx = {
-        let window = u16::from_le_bytes([buf[0], buf[1]]);
-        (window & ((1 << SPX_LEAF_BITS) - 1)) as usize
-    };
-
-    // --- tree_address: bits 16..37 (22 bits) ---
-    let tree_address = {
-        // Starts at byte 2, bit 0 within that byte. Spans at most 3 bytes (22 bits).
-        let window = u32::from_le_bytes([buf[2], buf[3], buf[4], 0]);
-        (window & ((1 << SPX_TREE_BITS) - 1)) as usize
-    };
-
-    // --- mhash: bits 40..175 → bytes 5..21 (17 bytes) ---
-    let mhash: [u8; SPX_FORS_MSG_BYTES] = buf[5..5 + SPX_FORS_MSG_BYTES].try_into()?;
-
-    Ok((leaf_idx, tree_address, mhash))
+    (leaf_idx, tree_address, fors_indices)
 }
 
-// Extract digest parts used for hint generation when running zkDSL
+fn expand_digest(digest: &Digest) -> (Digest, Digest) {
+    let mut ds_a = digest_expand_domain_sep();
+    let expanded_a = poseidon16_compress_pair(&ds_a, digest);
+    ds_a[0] += F::ONE;
+    let expanded_b = poseidon16_compress_pair(&ds_a, digest);
+    (expanded_a, expanded_b)
+}
+
+/// Extract digest parts for zkDSL hint generation.
+///
+/// Returns `(leaf_indices, fors_indices, leaf_uppers, fors_uppers)` where:
+///   leaf_indices[0..2] = leaf_idx, lli1, lli2  (lower 11 bits of expanded_a[0..2])
+///   fors_indices[0..4] = lower 15 bits of expanded_a[3..7]
+///   fors_indices[5..8] = lower 15 bits of expanded_b[0..3]
+///   leaf_uppers[i]     = upper 20 bits of expanded_a[i]
+///   fors_uppers[t]     = upper 16 bits of the corresponding expanded FE
 pub fn extract_digest_parts(
     digest: &[F; DIGEST_SIZE],
-) -> (usize, usize, [u8; SPX_FORS_MSG_BYTES], usize, usize, usize) {
-    let mut buf = [0u8; 32];
-    for (i, fe) in digest.iter().enumerate() {
-        buf[i * 4..][..4].copy_from_slice(&fe.as_canonical_u32().to_le_bytes());
+) -> ([usize; 3], [usize; SPX_FORS_TREES], [usize; 3], [usize; SPX_FORS_TREES]) {
+    let (expanded_a, expanded_b) = expand_digest(digest);
+    let leaf_mask = (1usize << SPX_TREE_HEIGHT) - 1;
+    let fors_mask = (1usize << SPX_FORS_HEIGHT) - 1;
+
+    let leaf_indices = [
+        expanded_a[0].as_canonical_u32() as usize & leaf_mask,
+        expanded_a[1].as_canonical_u32() as usize & leaf_mask,
+        expanded_a[2].as_canonical_u32() as usize & leaf_mask,
+    ];
+    let leaf_uppers = [
+        expanded_a[0].as_canonical_u32() as usize >> SPX_TREE_HEIGHT,
+        expanded_a[1].as_canonical_u32() as usize >> SPX_TREE_HEIGHT,
+        expanded_a[2].as_canonical_u32() as usize >> SPX_TREE_HEIGHT,
+    ];
+
+    let mut fors_indices = [0usize; SPX_FORS_TREES];
+    let mut fors_uppers = [0usize; SPX_FORS_TREES];
+    for t in 0..5 {
+        fors_indices[t] = expanded_a[3 + t].as_canonical_u32() as usize & fors_mask;
+        fors_uppers[t] = expanded_a[3 + t].as_canonical_u32() as usize >> SPX_FORS_HEIGHT;
+    }
+    for t in 0..4 {
+        fors_indices[5 + t] = expanded_b[t].as_canonical_u32() as usize & fors_mask;
+        fors_uppers[5 + t] = expanded_b[t].as_canonical_u32() as usize >> SPX_FORS_HEIGHT;
     }
 
-    let leaf_idx = {
-        let window = u16::from_le_bytes([buf[0], buf[1]]);
-        (window & ((1 << SPX_TREE_HEIGHT) - 1)) as usize
-    };
-
-    let tree_address = {
-        let window = u32::from_le_bytes([buf[2], buf[3], buf[4], 0]);
-        (window & ((1 << SPX_TREE_BITS) - 1)) as usize
-    };
-
-    let mhash: [u8; SPX_FORS_MSG_BYTES] = buf[5..5 + SPX_FORS_MSG_BYTES].try_into().unwrap();
-
-    // FE[5] stores mhash bits 120..134 in bits 0..14; range-check the remaining top 16 bits.
-    let fe5_upper = ((digest[5].as_canonical_u32() >> 15) & 0xFFFF) as usize;
-
-    let fe0_unused = ((digest[0].as_canonical_u32() >> SPX_LEAF_BITS) & 0x1F) as usize;
-
-    let fe1_unused = ((digest[1].as_canonical_u32() >> 6) & 0x3) as usize;
-
-    (leaf_idx, tree_address, mhash, fe5_upper, fe0_unused, fe1_unused)
+    (leaf_indices, fors_indices, leaf_uppers, fors_uppers)
 }
 
 impl SphincsPublicKey {
@@ -163,9 +181,8 @@ impl SphincsPublicKey {
         right[0] = message[8];
         let message_digest = poseidon16_compress_pair(&message[0..8].try_into().unwrap(), &right);
 
-        let (leaf_idx, tree_address, mhash) = extract_digest_hash(&message_digest).unwrap();
+        let (leaf_idx, tree_address, fors_indices) = extract_digest_hash(&message_digest);
 
-        let fors_indices = fors::extract_fors_indices(&mhash);
         let fors_pk = match fors::fors_verify(&sig.fors_sig, &fors_indices) {
             Ok(pk) => pk,
             Err(_) => return false,
