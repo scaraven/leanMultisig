@@ -127,7 +127,7 @@ pub fn sphincs_aggregate(signers: &[SphincsSignerInput], log_inv_rate: usize) ->
         &witness,
         &whir_config,
         false,
-    );
+    ).unwrap();
 
     AggregatedSPHINCS {
         proof: execution_proof.proof,
