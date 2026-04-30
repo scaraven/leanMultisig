@@ -1,5 +1,8 @@
 use clap::Parser;
-use rec_aggregation::{AggregationTopology, benchmark::{run_aggregation_benchmark, run_sphincs_benchmark}};
+use rec_aggregation::{
+    AggregationTopology,
+    benchmark::{run_aggregation_benchmark, run_sphincs_benchmark},
+};
 mod prove_poseidons;
 
 use crate::prove_poseidons::benchmark_prove_poseidon_16;

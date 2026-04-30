@@ -1,4 +1,4 @@
-use backend::{IntoParallelIterator, ParallelIterator, ParallelSlice};
+use backend::{IntoParallelIterator, ParallelIterator, ParallelSlice, PrimeCharacteristicRing};
 use serde::{Deserialize, Serialize};
 use utils::poseidon16_compress_pair;
 
@@ -50,8 +50,9 @@ pub struct HypertreeSignature {
 impl HypertreeSignature {
     pub fn flatten_hypertree_sig(&self) -> Vec<F> {
         let mut out = Vec::new();
-        for layer in &self.layers {
+        for (layer_idx, layer) in self.layers.iter().enumerate() {
             out.extend_from_slice(&layer.wots_sig.randomness);
+            out.push(F::from_usize(layer_idx));
             out.extend(layer.wots_sig.chain_tips.iter().flatten().copied());
             out.extend(layer.auth_path.iter().flatten().copied());
         }

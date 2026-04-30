@@ -384,7 +384,7 @@ fn compile_sphincs_program() -> Bytecode {
     //
     // TODO: if recursion is ever added to main_sphincs.py, replace this with the same
     // self-referential loop used in compile_main_program_self_referential().
-    let log_size_guess = 16;
+    let log_size_guess = 17;
     let bytecode_zero_eval = F::ONE;
 
     let replacements = build_vm_replacements(log_size_guess, bytecode_zero_eval, input_data_size_padded);
