@@ -1,7 +1,7 @@
 use backend::PrimeCharacteristicRing;
 use lean_compiler::*;
 use lean_vm::*;
-use rec_aggregation::PREAMBLE_MEMORY_LEN;
+use rec_aggregation::{PREAMBLE_MEMORY_LEN, sphincs::split_leaf_upper};
 use sphincs::{
     HypertreeSecretKey, HypertreeSignature, MESSAGE_LEN_FE, RANDOMNESS_LEN_FE, SPX_D, SPX_TREE_BITS, SPX_TREE_HEIGHT,
     SPX_WOTS_LEN, core::SphincsSecretKey, fors_sig_to_flat, hypertree_sign,
@@ -71,12 +71,9 @@ fn build_sphincs_hints(seed: [u8; 20], message: [F; MESSAGE_LEN_FE]) -> HashMap<
         .map(|&i| F::from_usize(i))
         .collect();
 
-    // digest_uppers: [upper0, upper1, upper2, ufi[0]..ufi[8]]  (12 values)
-    let digest_uppers: Vec<F> = leaf_uppers
-        .iter()
-        .chain(fors_uppers.iter())
-        .map(|&u| F::from_usize(u))
-        .collect();
+    let (digest_uppers_low, digest_uppers_high): (Vec<F>, Vec<F>) =
+        leaf_uppers.iter().map(|&u| split_leaf_upper(u)).unzip();
+    let digest_fors_uppers: Vec<F> = fors_uppers.iter().map(|&u| F::from_usize(u)).collect();
 
     let fors_sig_flat = fors_sig_to_flat(&sig.fors_sig);
     let hypertree_sig_flat = sig.hypertree_sig.flatten_hypertree_sig();
@@ -88,7 +85,9 @@ fn build_sphincs_hints(seed: [u8; 20], message: [F; MESSAGE_LEN_FE]) -> HashMap<
         ("pk".to_string(), vec![pk.to_vec()]),
         ("message".to_string(), vec![message.to_vec()]),
         ("digest_indices".to_string(), vec![digest_indices]),
-        ("digest_uppers".to_string(), vec![digest_uppers]),
+        ("digest_uppers_low".to_string(), vec![digest_uppers_low]),
+        ("digest_uppers_high".to_string(), vec![digest_uppers_high]),
+        ("digest_uppers_fors".to_string(), vec![digest_fors_uppers]),
         ("fors_sig".to_string(), vec![fors_sig_flat]),
         ("hypertree_sig".to_string(), vec![hypertree_sig_flat]),
     ])

@@ -24,7 +24,8 @@ def decompose_message_digest(message_digest):
     """
 
     LEAF_BITS  = SPX_TREE_HEIGHT   # 11
-    UPPER_LEAF = 31 - LEAF_BITS    # 20
+    UPPER_LEAF_LOWER = (31 - LEAF_BITS) / 2  # 10
+    UPPER_LEAF_HIGHER = 31 - LEAF_BITS - UPPER_LEAF_LOWER  # 10
     FORS_BITS  = SPX_FORS_HEIGHT   # 15
     UPPER_FORS = 31 - FORS_BITS    # 16
     FORS_A     = DIGEST_LEN - SPX_D
@@ -48,23 +49,30 @@ def decompose_message_digest(message_digest):
     indices = Array(N_SLOTS)
     hint_witness("digest_indices", indices)
 
-    uppers = Array(N_SLOTS)
-    hint_witness("digest_uppers", uppers)
+    uppers_lower = Array(SPX_D)
+    hint_witness("digest_uppers_low", uppers_lower)
+
+    uppers_higher = Array(SPX_D)
+    hint_witness("digest_uppers_high", uppers_higher)
+
+    fors_uppers = Array(SPX_FORS_TREES)
+    hint_witness("digest_uppers_fors", fors_uppers)
 
     for i in unroll(0, SPX_D):
         assert indices[i] < 2**LEAF_BITS
-        assert uppers[i] < 2**UPPER_LEAF
-        assert expanded_a[i] == indices[i] + uppers[i] * 2**LEAF_BITS
+        assert uppers_lower[i] < 2**UPPER_LEAF_LOWER
+        assert uppers_higher[i] < 2**UPPER_LEAF_HIGHER
+        assert expanded_a[i] == indices[i] + (uppers_lower[i] * 2**LEAF_BITS) + (uppers_higher[i] * 2**(LEAF_BITS + UPPER_LEAF_LOWER))
 
     for t in unroll(0, FORS_A):
         assert indices[SPX_D + t] < 2**FORS_BITS
-        assert uppers[SPX_D + t] < 2**UPPER_FORS
-        assert expanded_a[SPX_D + t] == indices[SPX_D + t] + uppers[SPX_D + t] * 2**FORS_BITS
+        assert fors_uppers[t] < 2**UPPER_FORS
+        assert expanded_a[SPX_D + t] == indices[SPX_D + t] + (fors_uppers[t] * 2**FORS_BITS)
 
     for t in unroll(0, FORS_B):
         assert indices[SPX_D + FORS_A + t] < 2**FORS_BITS
-        assert uppers[SPX_D + FORS_A + t] < 2**UPPER_FORS
-        assert expanded_b[t] == indices[SPX_D + FORS_A + t] + uppers[SPX_D + FORS_A + t] * 2**FORS_BITS
+        assert fors_uppers[FORS_A + t] < 2**UPPER_FORS
+        assert expanded_b[t] == indices[SPX_D + FORS_A + t] + fors_uppers[FORS_A + t] * 2**FORS_BITS
 
     return indices
 

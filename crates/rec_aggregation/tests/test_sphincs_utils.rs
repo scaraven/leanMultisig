@@ -2,7 +2,7 @@ use backend::PrimeCharacteristicRing;
 use lean_compiler::*;
 use lean_vm::*;
 use rand::{RngExt, SeedableRng, rngs::StdRng};
-use rec_aggregation::PREAMBLE_MEMORY_LEN;
+use rec_aggregation::{PREAMBLE_MEMORY_LEN, sphincs::split_leaf_upper};
 use sphincs::{
     RANDOMNESS_LEN_FE, SPX_FORS_HEIGHT, SPX_FORS_TREES, SPX_WOTS_LEN, SPX_WOTS_W, fold_roots, fors_key_gen,
     fors_sig_to_flat, fors_sign, fors_sign_single_tree,
@@ -330,18 +330,18 @@ fn test_decompose_message_digest() {
                 .chain(fors_indices.iter())
                 .map(|&i| F::from_usize(i))
                 .collect();
-            let digest_uppers: Vec<F> = leaf_uppers
-                .iter()
-                .chain(fors_uppers.iter())
-                .map(|&u| F::from_usize(u))
-                .collect();
+            let (digest_uppers_low, digest_uppers_high): (Vec<F>, Vec<F>) =
+                leaf_uppers.iter().map(|&u| split_leaf_upper(u)).unzip();
+            let digest_fors_uppers: Vec<F> = fors_uppers.iter().map(|&u| F::from_usize(u)).collect();
 
             let layer_leaf_indices = [leaf_indices[0], leaf_indices[1], leaf_indices[2]];
 
             let hints = HashMap::from([
                 ("message_digest".to_string(), vec![message_digest.to_vec()]),
                 ("digest_indices".to_string(), vec![digest_indices]),
-                ("digest_uppers".to_string(), vec![digest_uppers]),
+                ("digest_uppers_low".to_string(), vec![digest_uppers_low]),
+                ("digest_uppers_high".to_string(), vec![digest_uppers_high]),
+                ("digest_uppers_fors".to_string(), vec![digest_fors_uppers]),
                 (
                     "expected_fors_indices".to_string(),
                     vec![fors_indices.iter().map(|&i| F::from_usize(i)).collect()],

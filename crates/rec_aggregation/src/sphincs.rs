@@ -4,6 +4,7 @@ use lean_prover::prove_execution::prove_execution;
 use lean_prover::verify_execution::{ProofVerificationDetails, verify_execution};
 use lean_vm::{DIGEST_LEN, ExecutionMetadata, ExecutionWitness, F};
 use serde::{Deserialize, Serialize};
+use sphincs::SPX_TREE_HEIGHT;
 use sphincs::{
     MESSAGE_LEN_FE,
     core::{SphincsPublicKey, SphincsSig, extract_digest_parts},
@@ -13,6 +14,17 @@ use std::collections::HashMap;
 use utils::{poseidon_compress_slice, poseidon16_compress_pair};
 
 use crate::PREAMBLE_MEMORY_LEN;
+
+const HINT_DECOMPOSE_BITS_LOWER: usize = (31 - SPX_TREE_HEIGHT) / 2;
+const HINT_DECOMPOSE_BITS_UPPER: usize = (31 - SPX_TREE_HEIGHT) - HINT_DECOMPOSE_BITS_LOWER;
+
+/// Split a leaf upper value into (low HINT_DECOMPOSE_BITS_LOWER bits, remaining high bits).
+pub fn split_leaf_upper(u: usize) -> (F, F) {
+    (
+        F::from_usize(u & ((1 << HINT_DECOMPOSE_BITS_LOWER) - 1)),
+        F::from_usize(u >> HINT_DECOMPOSE_BITS_LOWER),
+    )
+}
 
 /// One signer's pre-computed input to the SPHINCS+ batch verifier.
 /// The secret key is not required here — all hint data is derivable from the signature.
@@ -80,20 +92,26 @@ fn build_signer_hints(
         .chain(fors_indices.iter())
         .map(|&i| F::from_usize(i))
         .collect();
-    let digest_uppers: Vec<F> = leaf_uppers
-        .iter()
-        .chain(fors_uppers.iter())
-        .map(|&u| F::from_usize(u))
-        .collect();
+    let (digest_uppers_lower, digest_uppers_high) = leaf_uppers.iter().map(|&u| split_leaf_upper(u)).unzip();
+
+    let digest_fors_uppers: Vec<F> = fors_uppers.iter().map(|&u| F::from_usize(u)).collect();
 
     hints
         .entry("digest_indices".to_string())
         .or_default()
         .push(digest_indices);
     hints
-        .entry("digest_uppers".to_string())
+        .entry("digest_uppers_low".to_string())
         .or_default()
-        .push(digest_uppers);
+        .push(digest_uppers_lower);
+    hints
+        .entry("digest_uppers_high".to_string())
+        .or_default()
+        .push(digest_uppers_high);
+    hints
+        .entry("digest_uppers_fors".to_string())
+        .or_default()
+        .push(digest_fors_uppers);
     hints
         .entry("fors_sig".to_string())
         .or_default()
