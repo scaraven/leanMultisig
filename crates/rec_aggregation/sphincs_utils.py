@@ -26,7 +26,12 @@ def do_1_merkel_level(bit, state_in, sibling, out):
     return
 
 @inline
-def do_5_merkle_level(k, state_in, sibling, state_out):
+def do_5_merkle_level(k, state_in, sibling, out):
+    match_range(k, range(0, 2**MERKLE_LEVEL_STEP), lambda k_prime: do_5_merkle_level_const(k_prime, state_in, sibling, out))
+    return
+
+@inline
+def do_5_merkle_level_const(k, state_in, sibling, state_out):
     # Advance MERKLE_LEVEL_STEP levels of the Merkle tree given a compile-time index k.
     #
     # Inputs:

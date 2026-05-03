@@ -38,17 +38,14 @@ def fors_merkle_verify(leaf_index, leaf_node, auth_path, out):
 
     leaf_node_arr = Array(DIGEST_LEN * (N_GROUPS - 1))
 
-    match_range(sub_indices[0], range(0, 2**MERKLE_LEVEL_STEP),
-                lambda k: do_5_merkle_level(k, leaf_node, auth_path, leaf_node_arr))
+    do_5_merkle_level(sub_indices[0], leaf_node, auth_path, leaf_node_arr)
     for i in unroll(1, N_GROUPS - 1):
-        match_range(sub_indices[i], range(0, 2**MERKLE_LEVEL_STEP),
-                    lambda k: do_5_merkle_level(k, leaf_node_arr + (i - 1) * DIGEST_LEN,
-                                                auth_path + MERKLE_LEVEL_STEP * i * DIGEST_LEN,
-                                                leaf_node_arr + i * DIGEST_LEN))
-    match_range(sub_indices[N_GROUPS - 1], range(0, 2**MERKLE_LEVEL_STEP),
-                lambda k: do_5_merkle_level(k, leaf_node_arr + (N_GROUPS - 2) * DIGEST_LEN,
+        do_5_merkle_level(sub_indices[i], leaf_node_arr + (i - 1) * DIGEST_LEN,
+                           auth_path + MERKLE_LEVEL_STEP * i * DIGEST_LEN,
+                           leaf_node_arr + i * DIGEST_LEN)
+    do_5_merkle_level(sub_indices[N_GROUPS - 1], leaf_node_arr + (N_GROUPS - 2) * DIGEST_LEN,
                                             auth_path + MERKLE_LEVEL_STEP * (N_GROUPS - 1) * DIGEST_LEN,
-                                            out))
+                                            out)
     return
 
 @inline
