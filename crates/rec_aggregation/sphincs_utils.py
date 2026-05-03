@@ -26,36 +26,36 @@ def do_1_merkel_level(bit, state_in, sibling, out):
     return
 
 @inline
-def do_5_merkle_level(bits, state_in, sibling, state_out):
-    # Advance 5 levels of the Merkle tree.
+def do_5_merkle_level(k, state_in, sibling, state_out):
+    # Advance MERKLE_LEVEL_STEP levels of the Merkle tree given a compile-time index k.
     #
     # Inputs:
-    #   bit       — position bit for this level, in {0, 1};
-    #               already binary-constrained by the caller's hint reconstruction
+    #   k         — compile-time integer in [0, 2^MERKLE_LEVEL_STEP); bits extracted via (k // 2^i) % 2
     #   state_in  — DIGEST_LEN FEs: hash of the current node
-    #   sibling   — DIGEST_LEN FEs: sibling node hash from the auth path
+    #   sibling   — MERKLE_LEVEL_STEP * DIGEST_LEN FEs: sibling hashes for each level
     # Output:
-    #   state_out — DIGEST_LEN FEs: poseidon(left, right) where
-    #               bit == 0 → left = state_in, right = sibling  (current is left child)
-    #               bit == 1 → left = sibling,  right = state_in (current is right child)
-    # Use bit multiplication for now
-    b0 = bits[0]
-    b1 = bits[1]
-    b2 = bits[2]
-    b3 = bits[3]
-    b4 = bits[4]
+    #   state_out — DIGEST_LEN FEs: computed node after MERKLE_LEVEL_STEP Poseidon compressions
+    b0 = k % 2
+    b0r = (k - b0) / 2
+    b1 = b0r % 2
+    b1r = (b0r - b1) / 2
+    b2 = b1r % 2
+    b2r = (b1r - b2) / 2
+    b3 = b2r % 2
+    b3r = (b2r - b3) / 2
+    b4 = b3r % 2
 
     intermediate_states = Array((MERKLE_LEVEL_STEP - 1) * DIGEST_LEN)
     if b0 == 0:
         poseidon16_compress(state_in, sibling, intermediate_states)
     else:
         poseidon16_compress(sibling, state_in, intermediate_states)
-    
+
     if b1 == 0:
         poseidon16_compress(intermediate_states, sibling + DIGEST_LEN, intermediate_states + DIGEST_LEN)
     else:
         poseidon16_compress(sibling + DIGEST_LEN, intermediate_states, intermediate_states + DIGEST_LEN)
-    
+
     if b2 == 0:
         poseidon16_compress(intermediate_states + DIGEST_LEN, sibling + 2 * DIGEST_LEN, intermediate_states + 2 * DIGEST_LEN)
     else:

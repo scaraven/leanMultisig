@@ -6,41 +6,49 @@ from utils import *
 def fors_merkle_verify(leaf_index, leaf_node, auth_path, out):
     # Verify a single SPX_FORS_HEIGHT (15)-level binary Merkle auth path.
     #
-    # At each level lv in 0..15, extracts bit (leaf_index >> lv) & 1 and dispatches
-    # to do_1_merkle_level. Because leaf_index is range-checked < 2^SPX_FORS_HEIGHT
-    # by decompose_message_digest, each bit is implicitly in {0, 1}.
+    # leaf_index is decomposed into N_GROUPS = SPX_FORS_HEIGHT / MERKLE_LEVEL_STEP
+    # sub-indices of MERKLE_LEVEL_STEP bits each via hint_decompose_bits_xmss.
+    # Each sub-index is range-constrained to [0, 2^MERKLE_LEVEL_STEP) by match_range,
+    # and the reconstruction assert ensures the decomposition is faithful.
     #
     # Inputs:
     #   leaf_index — scalar < 2^SPX_FORS_HEIGHT; range-checked by the caller
     #   leaf_node  — DIGEST_LEN FEs: level-0 node digest from the signature
-    #   auth_path  — SPX_FORS_HEIGHT * DIGEST_LEN (120) FEs: sibling hashes, bottom-up
+    #   auth_path  — SPX_FORS_HEIGHT * DIGEST_LEN FEs: sibling hashes, bottom-up
     # Output:
-    #   root_out   — DIGEST_LEN FEs: computed Merkle root written by this function;
+    #   out        — DIGEST_LEN FEs: computed Merkle root written by this function;
     #                the caller compares it against the expected root
     #
     # Precondition: leaf_index < 2^SPX_FORS_HEIGHT
     debug_assert(leaf_index < 2**SPX_FORS_HEIGHT)
 
-    leaf_node_arr = Array(DIGEST_LEN * (SPX_FORS_HEIGHT / MERKLE_LEVEL_STEP - 1))
+    N_GROUPS = SPX_FORS_HEIGHT / MERKLE_LEVEL_STEP
 
-    bits = Array(SPX_FORS_HEIGHT)
-    hint_decompose_bits(leaf_index, bits, SPX_FORS_HEIGHT, LITTLE_ENDIAN)
-    # Constrain each bit to {0, 1} and verify reconstruction matches leaf_index.
-    for i in unroll(0, SPX_FORS_HEIGHT):
-        assert bits[i] * (1 - bits[i]) == 0
-        
-    reconstructed: Mut = bits[0]
-    for i in unroll(1, SPX_FORS_HEIGHT):
-        reconstructed += bits[i] * 2**i
+    sub_indices = Array(N_GROUPS)
+    hint_decompose_bits_fors(sub_indices, leaf_index, MERKLE_LEVEL_STEP, N_GROUPS)
+
+    # Verify the decomposition reconstructs leaf_index.
+    reconstructed: Mut = sub_indices[0]
+    assert sub_indices[0] < 2**MERKLE_LEVEL_STEP
+    
+    for i in unroll(1, N_GROUPS):
+        reconstructed += sub_indices[i] * 2**(i * MERKLE_LEVEL_STEP)
+        assert sub_indices[i] < 2**MERKLE_LEVEL_STEP
     assert leaf_index == reconstructed
 
-    do_5_merkle_level(bits, leaf_node, auth_path, leaf_node_arr)
-    for i in unroll(1, SPX_FORS_HEIGHT / MERKLE_LEVEL_STEP - 1):
-        do_5_merkle_level(bits + i * MERKLE_LEVEL_STEP, leaf_node_arr + (i - 1) * DIGEST_LEN, 
-                          auth_path + MERKLE_LEVEL_STEP * i * DIGEST_LEN, leaf_node_arr + i * DIGEST_LEN)        
-    
-    do_5_merkle_level(bits + (SPX_FORS_HEIGHT / MERKLE_LEVEL_STEP - 1) * MERKLE_LEVEL_STEP, leaf_node_arr + (SPX_FORS_HEIGHT / MERKLE_LEVEL_STEP - 2) * DIGEST_LEN,
-                      auth_path + MERKLE_LEVEL_STEP * (SPX_FORS_HEIGHT / MERKLE_LEVEL_STEP - 1) * DIGEST_LEN, out)
+    leaf_node_arr = Array(DIGEST_LEN * (N_GROUPS - 1))
+
+    match_range(sub_indices[0], range(0, 2**MERKLE_LEVEL_STEP),
+                lambda k: do_5_merkle_level(k, leaf_node, auth_path, leaf_node_arr))
+    for i in unroll(1, N_GROUPS - 1):
+        match_range(sub_indices[i], range(0, 2**MERKLE_LEVEL_STEP),
+                    lambda k: do_5_merkle_level(k, leaf_node_arr + (i - 1) * DIGEST_LEN,
+                                                auth_path + MERKLE_LEVEL_STEP * i * DIGEST_LEN,
+                                                leaf_node_arr + i * DIGEST_LEN))
+    match_range(sub_indices[N_GROUPS - 1], range(0, 2**MERKLE_LEVEL_STEP),
+                lambda k: do_5_merkle_level(k, leaf_node_arr + (N_GROUPS - 2) * DIGEST_LEN,
+                                            auth_path + MERKLE_LEVEL_STEP * (N_GROUPS - 1) * DIGEST_LEN,
+                                            out))
     return
 
 @inline

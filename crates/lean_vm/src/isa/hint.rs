@@ -101,6 +101,7 @@ pub enum CustomHint {
     /// x = a0 + a1.4 + a2.4^2 + a3.4^3 + ... + a11.4^11 + b.2^24
     /// and ai < 4, b < 2^7 - 1
     /// The decomposition is unique, and always exists (except for x = -1)
+    DecomposeBitsFors,
     DecomposeBitsXMSS,
     DecomposeBitsMerkleWhir,
     DecomposeBits,
@@ -108,7 +109,8 @@ pub enum CustomHint {
     Log2Ceil,
 }
 
-pub const CUSTOM_HINTS: [CustomHint; 5] = [
+pub const CUSTOM_HINTS: [CustomHint; 6] = [
+    CustomHint::DecomposeBitsFors,
     CustomHint::DecomposeBitsXMSS,
     CustomHint::DecomposeBitsMerkleWhir,
     CustomHint::DecomposeBits,
@@ -119,6 +121,7 @@ pub const CUSTOM_HINTS: [CustomHint; 5] = [
 impl CustomHint {
     pub fn name(&self) -> &str {
         match self {
+            Self::DecomposeBitsFors => "hint_decompose_bits_fors",
             Self::DecomposeBitsXMSS => "hint_decompose_bits_xmss",
             Self::DecomposeBitsMerkleWhir => "hint_decompose_bits_merkle_whir",
             Self::DecomposeBits => "hint_decompose_bits",
@@ -129,6 +132,7 @@ impl CustomHint {
 
     pub fn n_args(&self) -> usize {
         match self {
+            Self::DecomposeBitsFors => 4,
             Self::DecomposeBitsXMSS => 5,
             Self::DecomposeBitsMerkleWhir => 4,
             Self::DecomposeBits => 4,
@@ -143,6 +147,22 @@ impl CustomHint {
         ctx: &mut HintExecutionContext<'_, '_, '_, M>,
     ) -> Result<(), RunnerError> {
         match self {
+            Self::DecomposeBitsFors => {
+                let decomposed_ptr = args[0].read_value(ctx.memory, ctx.fp)?.to_usize();
+                let leaf_index_decompose = args[1].read_value(ctx.memory, ctx.fp)?.to_usize();
+                let chunk_size = args[2].read_value(ctx.memory, ctx.fp)?.to_usize();
+                let num_groups = args[3].read_value(ctx.memory, ctx.fp)?.to_usize();
+
+                assert!(leaf_index_decompose < (1 << (chunk_size * num_groups)));
+                
+                let chunk_size_mask = (1 << chunk_size) - 1;
+                let mut memory_index = decomposed_ptr;
+                for i in 0..num_groups {
+                    let value = F::from_usize((leaf_index_decompose >> (chunk_size * i)) & chunk_size_mask);
+                    ctx.memory.set(memory_index, value)?;
+                    memory_index += 1;
+                }
+            },
             Self::DecomposeBitsXMSS => {
                 let decomposed_ptr = args[0].read_value(ctx.memory, ctx.fp)?.to_usize();
                 let remaining_ptr = args[1].read_value(ctx.memory, ctx.fp)?.to_usize();
