@@ -18,7 +18,12 @@ HYPERTREE_SIG_SIZE_FE = SPX_D * (RANDOMNESS_LEN + SPX_WOTS_LEN * DIGEST_LEN + SP
 MERKLE_LEVEL_STEP = 5 # number of Merkle levels processed by do_3_merkle_level; must divide SPX_FORS_HEIGHT
 
 @inline
-def do_1_merkel_level(bit, state_in, sibling, out):
+def do_1_merkle_level(bit, state_in, sibling, out):
+    match_range(bit, range(0, 2), lambda b: do_1_merkel_level_const(b, state_in, sibling, out))
+    return
+
+@inline
+def do_1_merkel_level_const(bit, state_in, sibling, out):
     if bit == 0:
         poseidon16_compress(state_in, sibling, out)
     else:

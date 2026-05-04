@@ -3,14 +3,17 @@ from sphincs_utils import *
 from sphincs_wots import *
 
 
+HYPERTREE_STEP = 5
+
 @inline
 def hypertree_merkle_verify(layer_leaf_index, leaf_node, auth_path, root_out):
     # Verify a single SPX_TREE_HEIGHT (11)-level binary Merkle auth path within one
-    # hypertree layer. Structure identical to fors_merkle_verify but for 11 levels.
+    # hypertree layer. 11 = 1 + 5 + 5, so we decompose as:
+    #   bit0        — low bit, constrained to {0,1} via bit-squaring
+    #   sub_indices — two 5-bit chunks of the upper 10 bits, range-checked inside do_5_merkle_level
     #
-    # At each level lv in 0..11, extracts bit (layer_leaf_index >> lv) & 1 and
-    # dispatches to do_1_merkle_level. layer_leaf_index is range-checked < 2^11
-    # by decompose_message_digest, so each bit is implicitly in {0, 1}.
+    # The reconstruction assertion layer_leaf_index == bit0 + sub_indices[0]*2 + sub_indices[1]*2^6
+    # binds the hints to layer_leaf_index.
     #
     # Inputs:
     #   layer_leaf_index — scalar < 2^SPX_TREE_HEIGHT; range-checked by decompose_message_digest
@@ -22,33 +25,27 @@ def hypertree_merkle_verify(layer_leaf_index, leaf_node, auth_path, root_out):
     # Precondition: layer_leaf_index < 2^SPX_TREE_HEIGHT
     debug_assert(layer_leaf_index < 2**SPX_TREE_HEIGHT)
 
-    bits = Array(SPX_TREE_HEIGHT)
-    hint_decompose_bits(layer_leaf_index, bits, SPX_TREE_HEIGHT, LITTLE_ENDIAN)
+    # Hint the low bit, constrain it to {0,1}, then derive the upper 10 bits.
+    bit0 = Array(1)
+    hint_decompose_bits(layer_leaf_index, bit0, 1, LITTLE_ENDIAN)
+    assert bit0[0] * (1 - bit0[0]) == 0
 
-    for i in unroll(0, SPX_TREE_HEIGHT):
-        # Constrain bits[i] to {0, 1} and verify reconstruction matches layer_leaf_index.
-        assert bits[i] * (1 - bits[i]) == 0
+    # upper_10 = (layer_leaf_index - bit0) / 2; decompose into two MERKLE_LEVEL_STEP-bit chunks.
+    upper_10 = (layer_leaf_index - bit0[0]) / 2
+    sub_indices = Array(2)
+    hint_decompose_bits_fors(sub_indices, upper_10, HYPERTREE_STEP, 2)
 
-    reconstructed: Mut = bits[0]
-    for i in unroll(1, SPX_TREE_HEIGHT):
-        reconstructed += bits[i] * 2**i
-    assert layer_leaf_index == reconstructed
-    
-    # Walk the auth path from the leaf node up to the root, applying poseidon16_compress
-    intermediate_states = Array((SPX_TREE_HEIGHT - 1) * DIGEST_LEN)
-    if bits[0] == 0:
-        poseidon16_compress(leaf_node, auth_path, intermediate_states)
-    else:
-        poseidon16_compress(auth_path, leaf_node, intermediate_states)
-    for i in unroll(1, SPX_TREE_HEIGHT - 1):
-        if bits[i] == 0:
-            poseidon16_compress(intermediate_states + (i - 1) * DIGEST_LEN, auth_path + i * DIGEST_LEN, intermediate_states + i * DIGEST_LEN)
-        else:
-            poseidon16_compress(auth_path + i * DIGEST_LEN, intermediate_states + (i - 1) * DIGEST_LEN, intermediate_states + i * DIGEST_LEN)
-    if bits[SPX_TREE_HEIGHT - 1] == 0:
-        poseidon16_compress(intermediate_states + (SPX_TREE_HEIGHT - 2) * DIGEST_LEN, auth_path + (SPX_TREE_HEIGHT - 1) * DIGEST_LEN, root_out)
-    else:
-        poseidon16_compress(auth_path + (SPX_TREE_HEIGHT - 1) * DIGEST_LEN, intermediate_states + (SPX_TREE_HEIGHT - 2) * DIGEST_LEN, root_out)
+    # Reconstruction: bind both hints to layer_leaf_index.
+    assert layer_leaf_index == bit0[0] + sub_indices[0] * 2 + sub_indices[1] * 2**6
+
+    # Walk the auth path: 1 level, then two 5-level strides.
+    after_bit0 = Array(DIGEST_LEN)
+    do_1_merkle_level(bit0[0], leaf_node, auth_path, after_bit0)
+
+    after_chunk0 = Array(DIGEST_LEN)
+    do_5_merkle_level(sub_indices[0], after_bit0, auth_path + DIGEST_LEN, after_chunk0)
+
+    do_5_merkle_level(sub_indices[1], after_chunk0, auth_path + (1 + HYPERTREE_STEP) * DIGEST_LEN, root_out)
     return
 
 @inline
