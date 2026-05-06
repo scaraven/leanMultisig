@@ -1,3 +1,4 @@
+use crate::DIGEST_LEN;
 use crate::core::{F, Label, SourceLocation};
 use crate::diagnostics::RunnerError;
 use crate::execution::ExecutionHistory;
@@ -101,6 +102,8 @@ pub enum CustomHint {
     /// x = a0 + a1.4 + a2.4^2 + a3.4^3 + ... + a11.4^11 + b.2^24
     /// and ai < 4, b < 2^7 - 1
     /// The decomposition is unique, and always exists (except for x = -1)
+    /// 
+    DecomposeWots,
     DecomposeBitsFors,
     DecomposeBitsXMSS,
     DecomposeBitsMerkleWhir,
@@ -109,7 +112,8 @@ pub enum CustomHint {
     Log2Ceil,
 }
 
-pub const CUSTOM_HINTS: [CustomHint; 6] = [
+pub const CUSTOM_HINTS: [CustomHint; 7] = [
+    CustomHint::DecomposeWots,
     CustomHint::DecomposeBitsFors,
     CustomHint::DecomposeBitsXMSS,
     CustomHint::DecomposeBitsMerkleWhir,
@@ -121,6 +125,7 @@ pub const CUSTOM_HINTS: [CustomHint; 6] = [
 impl CustomHint {
     pub fn name(&self) -> &str {
         match self {
+            Self::DecomposeWots => "hint_decompose_wots",
             Self::DecomposeBitsFors => "hint_decompose_bits_fors",
             Self::DecomposeBitsXMSS => "hint_decompose_bits_xmss",
             Self::DecomposeBitsMerkleWhir => "hint_decompose_bits_merkle_whir",
@@ -132,6 +137,7 @@ impl CustomHint {
 
     pub fn n_args(&self) -> usize {
         match self {
+            Self::DecomposeWots => 5,
             Self::DecomposeBitsFors => 4,
             Self::DecomposeBitsXMSS => 5,
             Self::DecomposeBitsMerkleWhir => 4,
@@ -147,6 +153,29 @@ impl CustomHint {
         ctx: &mut HintExecutionContext<'_, '_, '_, M>,
     ) -> Result<(), RunnerError> {
         match self {
+            Self::DecomposeWots => {
+                let encoding_ptr = args[0].read_value(ctx.memory, ctx.fp)?.to_usize();
+                let remaining_ptr = args[1].read_value(ctx.memory, ctx.fp)?.to_usize();
+                let encoding_fe_ptr = args[2].read_value(ctx.memory, ctx.fp)?.to_usize();
+                // Number of chunks per FE
+                let num_chunks = args[3].read_value(ctx.memory, ctx.fp)?.to_usize();
+                // How many bits each chunk should contain
+                let chunk_size_bits = args[4].read_value(ctx.memory, ctx.fp)?.to_usize();
+
+                // Ensure we only use at most the bottom 24 bits of each FE
+                assert!(num_chunks * chunk_size_bits <= 24, "DecomposeWots hint supports decomposing up to 24 bits per FE");
+
+                // Implementation for decomposing WOTS values
+                for i in 0..DIGEST_LEN {
+                    let mut value = ctx.memory.get(encoding_fe_ptr + i)?.to_usize();
+                    for j in 0..num_chunks {
+                        let chunk_value = F::from_usize(value & ((1 << chunk_size_bits) - 1));
+                        value >>= chunk_size_bits;
+                        ctx.memory.set(encoding_ptr + i * num_chunks + j, chunk_value)?;
+                    }
+                    ctx.memory.set(remaining_ptr + i, F::from_usize(value))?;
+                }
+            }
             Self::DecomposeBitsFors => {
                 let decomposed_ptr = args[0].read_value(ctx.memory, ctx.fp)?.to_usize();
                 let leaf_index_decompose = args[1].read_value(ctx.memory, ctx.fp)?.to_usize();
