@@ -16,9 +16,10 @@ def wots_encode_and_complete(message, layer_index, randomness, chain_tips, local
     #        take the first 32 chunks as encoding[0..32].
     #        Assert each encoding[i] < SPX_WOTS_W.
     #        Assert sum(encoding) == TARGET_SUM.
-    #   3. For each chain i in 0..32:
-    #        complete (SPX_WOTS_W - 1 - encoding[i]) hashes via iterate_hash,
-    #        writing the result into chain_ends[i].
+    #   3. For each pair i in 0..16:
+    #        joint_n = encoding[2i] + encoding[2i+1] * SPX_WOTS_W
+    #        complete both chains via iterate_hash_pair, accumulate pair sums.
+    #        Assert accumulated pair_sum == TARGET_SUM.
     #   4. Fold the 32 chain-end digests into a single public key hash via fold_wots_pubkey.
     #
     # Inputs:
@@ -64,17 +65,18 @@ def wots_encode_and_complete(message, layer_index, randomness, chain_tips, local
             partial_sum += encoding[i * 6 + j] * SPX_WOTS_W**j
         assert partial_sum == encoding_fe[i]
 
-    # Verify TARGET_SUM over the 32 encoding indices
-    target_sum: Mut = encoding[0]
-    for i in unroll(1, SPX_WOTS_LEN):
-        target_sum += encoding[i]
-    assert target_sum == TARGET_SUM
-
-    # Step 3: complete each chain — hash (CHAIN_LENGTH - 1 - encoding[i]) more times
+    # Step 3: complete each chain pair — dispatch two adjacent chains per match_range call,
+    # accumulating raw_left + raw_right per pair; the total equals sum(encoding[0..32]).
     chain_ends = Array(SPX_WOTS_LEN * DIGEST_LEN)
-    for i in unroll(0, SPX_WOTS_LEN):
-        n_remaining = (SPX_WOTS_W - 1) - encoding[i]
-        iterate_hash(chain_tips + i * DIGEST_LEN, n_remaining, chain_ends + i * DIGEST_LEN, local_zero_buf)
+    pair_sum: Mut = 0
+    for i in unroll(0, SPX_WOTS_LEN / 2):
+        joint_n = encoding[2 * i] + encoding[2 * i + 1] * SPX_WOTS_W
+        pair_sum_ptr = Array(1)
+        iterate_hash_pair(chain_tips + 2 * i * DIGEST_LEN, joint_n, chain_ends + 2 * i * DIGEST_LEN, pair_sum_ptr, local_zero_buf)
+        pair_sum += pair_sum_ptr[0]
+
+    # Verify TARGET_SUM: sum(raw_left[i] + raw_right[i]) == sum(encoding[0..32])
+    assert pair_sum == TARGET_SUM
 
     # Step 4: fold 32 chain-end digests into wots_pubkey
     fold_wots_pubkey(chain_ends, wots_pubkey)

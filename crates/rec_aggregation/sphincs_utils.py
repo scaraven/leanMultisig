@@ -99,12 +99,39 @@ def _iterate_hash_const(input, k, output, local_zero_buf):
 
 
 @inline
-def iterate_hash(input, n, output, local_zero_buf):
-    # Apply poseidon16_compress(state, zero_buf) exactly n times.
+def _chain_hash_pair_const(input_left, n, output_left, pair_sum_ptr, local_zero_buf):
+    # Complete two WOTS+ chains simultaneously given a compile-time joint index n.
     #
-    # Precondition: n < SPX_WOTS_W (enforced by encoding checks in wots_encode_and_complete)
-    debug_assert(n < SPX_WOTS_W)
-    match_range(n, range(0, SPX_WOTS_W), lambda k: _iterate_hash_const(input, k, output, local_zero_buf))
+    # n encodes a pair of encoding values (raw_left, raw_right) as:
+    #   n = raw_left + raw_right * SPX_WOTS_W,  n ∈ [0, SPX_WOTS_W²)
+    #
+    # Each chain is completed with (SPX_WOTS_W - 1 - raw_x) further hash iterations.
+    # pair_sum_ptr[0] is set to raw_left + raw_right for target-sum accumulation.
+    debug_assert(n < SPX_WOTS_W**2)
+
+    raw_left = n % SPX_WOTS_W
+    raw_right = (n - raw_left) / SPX_WOTS_W
+
+    n_left = (SPX_WOTS_W - 1) - raw_left
+    _iterate_hash_const(input_left, n_left, output_left, local_zero_buf)
+
+    n_right = (SPX_WOTS_W - 1) - raw_right
+    input_right = input_left + DIGEST_LEN
+    output_right = output_left + DIGEST_LEN
+    _iterate_hash_const(input_right, n_right, output_right, local_zero_buf)
+
+    pair_sum_ptr[0] = raw_left + raw_right
+    return
+
+
+@inline
+def iterate_hash_pair(input_left, n, output_left, pair_sum_ptr, local_zero_buf):
+    # Dispatch two adjacent WOTS+ chains via a single match_range over [0, SPX_WOTS_W²).
+    #
+    # n = encoding[2*i] + encoding[2*i+1] * SPX_WOTS_W
+    # Precondition: n < SPX_WOTS_W² (implied by encoding[i] < SPX_WOTS_W for both components)
+    debug_assert(n < SPX_WOTS_W**2)
+    match_range(n, range(0, SPX_WOTS_W**2), lambda k: _chain_hash_pair_const(input_left, k, output_left, pair_sum_ptr, local_zero_buf))
     return
 
 @inline

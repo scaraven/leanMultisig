@@ -43,30 +43,6 @@ fn test_fold_roots_sphincs() {
     });
 }
 
-#[test]
-fn test_chain_hash_sphincs() {
-    run_on_large_stack(|| {
-        let path = format!("{}/tests/test_chain_hash.py", env!("CARGO_MANIFEST_DIR"));
-        let bytecode = compile_program(&ProgramSource::Filepath(path));
-
-        for n in [0, 1, 2, 3, 4, 5, 8, 10, 12, 15] {
-            let mut rng = StdRng::seed_from_u64(0);
-            let data: Vec<F> = (0..DIGEST_LEN).map(|_| rng.random()).collect();
-            let hash = iterate_hash(data.clone().try_into().unwrap(), n);
-            let hints = HashMap::from([
-                ("n".to_string(), vec![vec![F::from_usize(n)]]),
-                ("input".to_string(), vec![data]),
-                ("expected".to_string(), vec![hash.to_vec()]),
-            ]);
-            let witness = ExecutionWitness {
-                preamble_memory_len: PREAMBLE_MEMORY_LEN,
-                hints,
-            };
-            execute_bytecode(&bytecode, &vec![F::from_usize(0); DIGEST_LEN], &witness, false);
-        }
-    });
-}
-
 /// Build hints for test_sphincs_wots.py:
 ///   "message" (8) | "layer_index" (1) | "randomness" (8: 7 random + layer_index) | "chain_tips" (32*8) | "expected" (8)
 fn build_wots_hints(
