@@ -1,7 +1,7 @@
 use backend::*;
 use rand::{CryptoRng, RngExt};
 use serde::{Deserialize, Serialize};
-use utils::{ToUsize, poseidon16_compress_pair, to_little_endian_bits};
+use utils::{ToUsize, poseidon16_compress_pair};
 
 use crate::*;
 
@@ -108,10 +108,9 @@ pub fn find_randomness_for_wots_encoding(
 ///
 /// encoding_fe = poseidon(message[0..8] | [randomness[0..7], layer_index])
 ///
-/// Extract 4-bit chunks from encoding_fe (24 bits per element, little-endian), take first 32.
-/// Valid iff sum of indices == TARGET_SUM.
+/// Extract 4 x 4-bit chunks from the bottom 16 bits of each of the 8 FEs (little-endian),
+/// yielding exactly 32 indices. Valid iff sum of indices == TARGET_SUM.
 pub fn wots_encode(message: &Digest, layer_index: u32, randomness: &[F; RANDOMNESS_LEN_FE]) -> Option<[u8; V]> {
-    // encoding_fe = poseidon(message (8 fe), randomness (7 fe) + layer_index)
     let mut input_right = [F::default(); 8];
     input_right[..RANDOMNESS_LEN_FE].copy_from_slice(randomness);
     input_right[RANDOMNESS_LEN_FE] = F::from_usize(layer_index as usize);
@@ -121,21 +120,15 @@ pub fn wots_encode(message: &Digest, layer_index: u32, randomness: &[F; RANDOMNE
         return None;
     }
 
-    let all_indices: Vec<u8> = compressed
-        .iter()
-        .flat_map(|kb| to_little_endian_bits(kb.to_usize(), 24))
-        .collect::<Vec<_>>()
-        .chunks_exact(W)
-        .take(V + V_GRINDING)
-        .map(|chunk| {
-            chunk
-                .iter()
-                .enumerate()
-                .fold(0u8, |acc, (i, &bit)| acc | (u8::from(bit) << i))
-        })
-        .collect();
+    // Extract 4 chunks of W=4 bits from the bottom 16 bits of each FE (4 chunks × 8 FEs = 32).
+    let mask = (1usize << W) - 1;
+    let all_indices: [u8; V] = std::array::from_fn(|i| {
+        let fe_idx = i / W;
+        let chunk_idx = i % W;
+        ((compressed[fe_idx].to_usize() >> (chunk_idx * W)) & mask) as u8
+    });
 
-    is_valid_encoding(&all_indices).then(|| all_indices.try_into().unwrap())
+    is_valid_encoding(&all_indices).then_some(all_indices)
 }
 
 fn is_valid_encoding(encoding: &[u8]) -> bool {

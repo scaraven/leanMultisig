@@ -43,11 +43,11 @@ def wots_encode_and_complete(message, layer_index, randomness, chain_tips, local
     encoding_fe = Array(DIGEST_LEN)
     poseidon16_compress(message, randomness, encoding_fe)
 
-    # Step 2: decompose each of the 8 FEs into 2 chunks of 8 bits
-    # This gives us 16 FEs of paired 4-bit encoding values
+    # Step 2: decompose each of the 8 FEs into 2 chunks of 8 bits (each chunk packs two 4-bit indices)
+    # 2 chunks × 8 FEs = 16 paired values; remaining holds bits 16–30 of each FE
     encoding = Array(SPX_WOTS_LEN / 2)
     remaining = Array(DIGEST_LEN)
-    hint_decompose_wots(encoding, remaining, encoding_fe, SPX_WOTS_W / 2, SPX_WOTS_LOGW * 2)
+    hint_decompose_wots(encoding, remaining, encoding_fe, 2, SPX_WOTS_LOGW * 2)
 
     # We do not need to range check remaining here, because if remaining is too large, the encoding_fe decomposition will not pass
     for i in unroll(0, DIGEST_LEN):
