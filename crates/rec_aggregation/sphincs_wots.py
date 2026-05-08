@@ -43,36 +43,25 @@ def wots_encode_and_complete(message, layer_index, randomness, chain_tips, local
     encoding_fe = Array(DIGEST_LEN)
     poseidon16_compress(message, randomness, encoding_fe)
 
-    # Step 2: decompose first 6 FEs of encoding_fe into 4-bit chunks via hint
-    # 24 usable bits / 4 bits per chunk = 6 chunks per FE
-    # 6 FEs × 6 chunks = 36 total; first 32 are the WOTS encoding indices
-    encoding = Array(36)
-    remaining = Array(6)
-    hint_decompose_bits_xmss(encoding, remaining, encoding_fe, 6, 4)
+    # Step 2: decompose each of the 8 FEs into 2 chunks of 8 bits (each chunk packs two 4-bit indices)
+    # 2 chunks × 8 FEs = 16 paired values; remaining holds bits 16–30 of each FE
+    encoding = Array(SPX_WOTS_LEN / 2)
+    remaining = Array(DIGEST_LEN)
+    hint_decompose_wots(encoding, remaining, encoding_fe, 2, SPX_WOTS_LOGW * 2)
 
-    # Verify decomposition: each chunk in [0, 16), remainder < 127,
-    # and reconstructed value matches original FE
-    for i in unroll(0, 6):
-        for j in unroll(0, 6):
-            assert encoding[i * 6 + j] < SPX_WOTS_W
-
-        # Constrain the high 7-bit remainder so the hinted decomposition
-        # corresponds to a valid 31-bit FE decomposition.
-        assert remaining[i] < 2**7 - 1
-
-        partial_sum: Mut = remaining[i] * 2**24
-        for j in unroll(0, 6):
-            partial_sum += encoding[i * 6 + j] * SPX_WOTS_W**j
-        assert partial_sum == encoding_fe[i]
+    # We do not need to range check remaining here, because if remaining is too large, the encoding_fe decomposition will not pass
+    for i in unroll(0, DIGEST_LEN):
+        assert encoding[2 * i] < SPX_WOTS_W ** 2
+        assert encoding[2 * i + 1] < SPX_WOTS_W ** 2
+        assert encoding_fe[i] == encoding[2 * i] + encoding[2 * i + 1] * SPX_WOTS_W ** 2 + remaining[i] * 2 ** (SPX_WOTS_LOGW * 4)
 
     # Step 3: complete each chain pair — dispatch two adjacent chains per match_range call,
     # accumulating raw_left + raw_right per pair; the total equals sum(encoding[0..32]).
     chain_ends = Array(SPX_WOTS_LEN * DIGEST_LEN)
     pair_sum: Mut = 0
     for i in unroll(0, SPX_WOTS_LEN / 2):
-        joint_n = encoding[2 * i] + encoding[2 * i + 1] * SPX_WOTS_W
         pair_sum_ptr = Array(1)
-        iterate_hash_pair(chain_tips + 2 * i * DIGEST_LEN, joint_n, chain_ends + 2 * i * DIGEST_LEN, pair_sum_ptr, local_zero_buf)
+        iterate_hash_pair(chain_tips + 2 * i * DIGEST_LEN, encoding[i], chain_ends + 2 * i * DIGEST_LEN, pair_sum_ptr, local_zero_buf)
         pair_sum += pair_sum_ptr[0]
 
     # Verify TARGET_SUM: sum(raw_left[i] + raw_right[i]) == sum(encoding[0..32])

@@ -153,6 +153,9 @@ def hint_decompose_bits_merkle_whir(*args):
 def hint_decompose_bits_fors(*args):
     _ = args
 
+def hint_decompose_wots(*args):
+    _ = args
+
 def hint_log2_ceil(n):
     return log2_ceil(n)
 
