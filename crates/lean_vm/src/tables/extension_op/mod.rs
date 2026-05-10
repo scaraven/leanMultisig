@@ -6,9 +6,7 @@ use air::*;
 mod exec;
 pub use exec::fill_trace_extension_op;
 
-// domain separation: Poseidon16=1, Poseidon24= 2 or 3 or 4, ExtensionOp>=8
-/// Extension op PRECOMPILE_DATA bit-field encoding:
-/// aux = 4*is_be + 8*flag_add + 16*flag_mul + 32*flag_poly_eq + 64*len
+// `PRECOMPILE_DATA` encoding: see `tables/mod.rs`.
 pub(crate) const EXT_OP_FLAG_IS_BE: usize = 4;
 pub(crate) const EXT_OP_FLAG_ADD: usize = 8;
 pub(crate) const EXT_OP_FLAG_MUL: usize = 16;
@@ -106,16 +104,17 @@ impl<const BUS: bool> TableT for ExtensionOpPrecompile<BUS> {
         ]
     }
 
+    #[allow(clippy::vec_init_then_push)] // https://github.com/leanEthereum/leanMultisig/issues/198
     fn bus(&self) -> Bus {
+        let mut data = Vec::with_capacity(4);
+        data.push(BusData::Column(COL_AUX_EXTENSION_OP));
+        data.push(BusData::Column(COL_IDX_A));
+        data.push(BusData::Column(COL_IDX_B));
+        data.push(BusData::Column(COL_IDX_RES));
         Bus {
             direction: BusDirection::Pull,
             selector: COL_ACTIVATION_FLAG,
-            data: vec![
-                BusData::Column(COL_AUX_EXTENSION_OP),
-                BusData::Column(COL_IDX_A),
-                BusData::Column(COL_IDX_B),
-                BusData::Column(COL_IDX_RES),
-            ],
+            data,
         }
     }
 

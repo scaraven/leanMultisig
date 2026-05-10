@@ -32,14 +32,38 @@ pub struct SparseStatement<EF> {
     pub total_num_variables: usize,
     pub point: MultilinearPoint<EF>,
     pub values: Vec<SparseValue<EF>>,
+    /// When true, the weight polynomial is `next_mle(point, .)` instead of `eq(point, .)`.
+    pub is_next: bool,
 }
 
 impl<EF> SparseStatement<EF> {
     pub fn new(total_num_variables: usize, point: MultilinearPoint<EF>, values: Vec<SparseValue<EF>>) -> Self {
+        assert!(
+            total_num_variables >= point.len(),
+            "total_num_variables ({}) must be >= point.len() ({})",
+            total_num_variables,
+            point.len()
+        );
         Self {
             total_num_variables,
             point,
             values,
+            is_next: false,
+        }
+    }
+
+    pub fn new_next(total_num_variables: usize, point: MultilinearPoint<EF>, values: Vec<SparseValue<EF>>) -> Self {
+        assert!(
+            total_num_variables >= point.len(),
+            "total_num_variables ({}) must be >= point.len() ({})",
+            total_num_variables,
+            point.len()
+        );
+        Self {
+            total_num_variables,
+            point,
+            values,
+            is_next: true,
         }
     }
 
@@ -48,6 +72,7 @@ impl<EF> SparseStatement<EF> {
             total_num_variables,
             point: MultilinearPoint(vec![]),
             values: vec![SparseValue { selector: index, value }],
+            is_next: false,
         }
     }
 
@@ -56,11 +81,14 @@ impl<EF> SparseStatement<EF> {
             total_num_variables: point.len(),
             point,
             values: vec![SparseValue { selector: 0, value }],
+            is_next: false,
         }
     }
 
     pub fn selector_num_variables(&self) -> usize {
-        self.total_num_variables - self.inner_num_variables()
+        self.total_num_variables
+            .checked_sub(self.inner_num_variables())
+            .expect("invariant violated: total_num_variables < point.len()")
     }
 
     pub fn inner_num_variables(&self) -> usize {

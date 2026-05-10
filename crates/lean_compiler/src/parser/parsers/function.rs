@@ -1,6 +1,5 @@
 use super::expression::ExpressionParser;
-use super::statement::StatementParser;
-use super::{Parse, ParseContext, next_inner_pair};
+use super::{Parse, ParseContext, next_inner_pair, push_statement_with_location};
 use crate::{
     a_simplify_lang::VarOrConstMallocAccess,
     lang::{AssignmentTarget, Expression, Function, FunctionArg, Line, MathOperation, SimpleExpr, SourceLocation},
@@ -9,7 +8,7 @@ use crate::{
         grammar::{ParsePair, Rule},
     },
 };
-use lean_vm::{CUSTOM_HINTS, ExtensionOpMode, POSEIDON16_NAME};
+use lean_vm::{ALL_POSEIDON16_NAMES, CUSTOM_HINTS, ExtensionOpMode};
 
 /// Reserved function names that users cannot define.
 pub const RESERVED_FUNCTION_NAMES: &[&str] = &[
@@ -34,8 +33,7 @@ fn is_reserved_function_name(name: &str) -> bool {
     if RESERVED_FUNCTION_NAMES.contains(&name) || CUSTOM_HINTS.iter().any(|hint| hint.name() == name) {
         return true;
     }
-    // Check precompile names (poseidon16, extension_op functions)
-    if name == POSEIDON16_NAME {
+    if ALL_POSEIDON16_NAMES.contains(&name) {
         return true;
     }
     if ExtensionOpMode::from_name(name).is_some() {
@@ -85,7 +83,7 @@ impl Parse<Function> for FunctionParser {
                     }
                 }
                 Rule::statement => {
-                    Self::add_statement_with_location(&mut body, pair, ctx)?;
+                    push_statement_with_location(&mut body, pair, ctx)?;
                 }
                 _ => {}
             }
@@ -104,25 +102,6 @@ impl Parse<Function> for FunctionParser {
 }
 
 impl FunctionParser {
-    fn add_statement_with_location(
-        lines: &mut Vec<Line>,
-        pair: ParsePair<'_>,
-        ctx: &mut ParseContext,
-    ) -> ParseResult<()> {
-        let line_number = pair.line_col().0;
-        let line = StatementParser.parse(pair, ctx)?;
-
-        lines.push(Line::LocationReport {
-            location: SourceLocation {
-                file_id: ctx.current_file_id,
-                line_number,
-            },
-        });
-        lines.push(line);
-
-        Ok(())
-    }
-
     /// Infer the number of return values from return statements in the function body.
     /// All return statements must return the same number of values.
     fn infer_return_count(func_name: &str, body: &[Line]) -> ParseResult<usize> {

@@ -2,18 +2,23 @@
 
 use backend::*;
 
-use crate::{CodeAddress, EF, F, FileId, FunctionName, Hint, SourceLocation};
+use crate::{DIMENSION, EF, F, FileId, FunctionName, Hint, N_INSTRUCTION_COLUMNS, SourceLocation};
 
 use super::Instruction;
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodeEntry {
+    pub hints: Box<[Hint]>, // executed before the instruction
+    pub instruction: Instruction,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Bytecode {
-    pub instructions: Vec<Instruction>,
+    pub code: Vec<CodeEntry>,
     pub instructions_multilinear: Vec<F>,
     pub instructions_multilinear_packed: Vec<EFPacking<EF>>, // embedded in the extension field(bad, TODO)
-    pub hints: BTreeMap<CodeAddress, Vec<Hint>>,             // pc -> hints
     pub starting_frame_memory: usize,
     pub hash: [F; DIGEST_ELEMS],
     // debug
@@ -26,7 +31,7 @@ pub struct Bytecode {
 
 impl Bytecode {
     pub fn size(&self) -> usize {
-        self.instructions.len()
+        self.code.len()
     }
 
     pub fn padded_size(&self) -> usize {
@@ -36,17 +41,25 @@ impl Bytecode {
     pub fn log_size(&self) -> usize {
         log2_ceil_usize(self.size())
     }
+
+    pub fn cumulated_n_vars(&self) -> usize {
+        self.log_size() + log2_ceil_usize(N_INSTRUCTION_COLUMNS)
+    }
+
+    pub fn bytecode_claim_size(&self) -> usize {
+        (self.cumulated_n_vars() + 1) * DIMENSION
+    }
 }
 
 impl Display for Bytecode {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        for (pc, instruction) in self.instructions.iter().enumerate() {
-            for hint in self.hints.get(&pc).unwrap_or(&Vec::new()) {
+        for (pc, entry) in self.code.iter().enumerate() {
+            for hint in entry.hints.iter() {
                 if !matches!(hint, Hint::LocationReport { .. }) {
                     writeln!(f, "hint: {hint}")?;
                 }
             }
-            writeln!(f, "{pc:>4}: {instruction}")?;
+            writeln!(f, "{pc:>4}: {}", entry.instruction)?;
         }
         Ok(())
     }
