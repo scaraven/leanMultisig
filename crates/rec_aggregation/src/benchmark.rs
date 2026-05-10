@@ -1,24 +1,17 @@
 use backend::*;
 use lean_vm::*;
-<<<<<<< HEAD
-use sphincs::signers_cache::{NUM_SPHINCS_SIGNERS, get_sphincs_benchmark_signatures, message_for_sphincs_signer};
-=======
 use serde::{Deserialize, Serialize};
->>>>>>> d13cfa5d23c2edbd907afca9b598c1622f03fcbc
+use sphincs::signers_cache::{NUM_SPHINCS_SIGNERS, get_sphincs_benchmark_signatures, message_for_sphincs_signer};
 use std::io::{self, Write};
 use std::time::Instant;
 use utils::ansi as s;
 use xmss::signers_cache::{BENCHMARK_SLOT, get_benchmark_signatures, message_for_benchmark};
 use xmss::{XmssPublicKey, XmssSignature};
 
-<<<<<<< HEAD
 use crate::compilation::{
     get_aggregation_bytecode, get_sphincs_bytecode, init_aggregation_bytecode, init_sphincs_bytecode,
 };
 use crate::sphincs::{SphincsSignerInput, sphincs_aggregate, sphincs_verify_aggregation};
-use crate::{AggregatedXMSS, AggregationTopology, count_signers, xmss_aggregate};
-=======
-use crate::compilation::{get_aggregation_bytecode, init_aggregation_bytecode};
 use crate::type_1_aggregation::{TypeOneMultiSignature, aggregate_type_1, verify_type_1};
 
 #[derive(Debug, Clone)]
@@ -53,7 +46,6 @@ pub(crate) fn count_signers(topology: &AggregationTopology) -> usize {
     let n_overlaps = topology.children.len().saturating_sub(1);
     topology.raw_xmss + child_count - topology.overlap * n_overlaps
 }
->>>>>>> d13cfa5d23c2edbd907afca9b598c1622f03fcbc
 
 fn count_nodes(topology: &AggregationTopology) -> usize {
     1 + topology.children.iter().map(count_nodes).sum::<usize>()
@@ -485,7 +477,7 @@ pub fn run_sphincs_benchmark(n_sigs: usize, log_inv_rate: usize, tracing: bool) 
     init_sphincs_bytecode();
     println!(
         "SPHINCS+ program: {} instructions\n",
-        pretty_integer(get_sphincs_bytecode().instructions.len())
+        pretty_integer(get_sphincs_bytecode().instructions_multilinear.len())
     );
 
     let cache = get_sphincs_benchmark_signatures();
@@ -515,7 +507,7 @@ pub fn run_sphincs_benchmark(n_sigs: usize, log_inv_rate: usize, tracing: bool) 
         s::R
     );
     let plain_len = plain_desc.chars().count();
-    let mut display = LiveTree::new(vec![desc], vec![plain_len]);
+    let mut display = LiveTree::new(vec![desc], vec![plain_len], false);
 
     if !tracing {
         display.print_initial();
@@ -534,7 +526,7 @@ pub fn run_sphincs_benchmark(n_sigs: usize, log_inv_rate: usize, tracing: bool) 
         let meta = agg.metadata.as_ref().unwrap();
         display.update_node(
             0,
-            NodeStats {
+            &NodeStats {
                 time_secs: elapsed,
                 proof_kib,
                 cycles: meta.cycles,

@@ -5,14 +5,15 @@ use lean_prover::{
     WHIR_SUBSEQUENT_FOLDING_FACTOR, default_whir_config,
 };
 use lean_vm::*;
+use sphincs::V_GRINDING;
 use std::collections::{BTreeMap, HashMap};
+use std::path::Path;
 use std::sync::OnceLock;
 use sub_protocols::{N_VARS_TO_SEND_GKR_COEFFS, min_stacked_n_vars, total_whir_statements};
 use tracing::instrument;
 use utils::Counter;
-use xmss::{LOG_LIFETIME, MESSAGE_LEN_FE, PUBLIC_PARAM_LEN_FE, RANDOMNESS_LEN_FE, TARGET_SUM, V, W, XMSS_DIGEST_LEN};
+use xmss::{LOG_LIFETIME, MESSAGE_LEN_FE, RANDOMNESS_LEN_FE, TARGET_SUM, V, W};
 
-use crate::bytecode_claims::bytecode_reduction_sumcheck_proof_size;
 use crate::type_1_aggregation::TWEAK_TABLE_SIZE_FE_PADDED;
 
 // preamble memory layout: see `build_preamble_memory` in utils.py:
@@ -37,19 +38,7 @@ pub fn init_aggregation_bytecode() {
     BYTECODE.get_or_init(compile_main_program_self_referential);
 }
 
-<<<<<<< HEAD
-fn compile_main_program(inner_program_log_size: usize, bytecode_zero_eval: F) -> Bytecode {
-    let bytecode_point_n_vars = inner_program_log_size + log2_ceil_usize(N_INSTRUCTION_COLUMNS);
-    let claim_data_size = (bytecode_point_n_vars + 1) * DIMENSION;
-    let claim_data_size_padded = claim_data_size.next_multiple_of(DIGEST_LEN);
-    let input_data_size =
-        1 + DIGEST_LEN + MESSAGE_LEN_FE + 2 + N_MERKLE_CHUNKS_FOR_SLOT + claim_data_size_padded + DIGEST_LEN;
-    let input_data_size_padded = input_data_size.next_multiple_of(DIGEST_LEN);
-    let mut replacements = build_vm_replacements(inner_program_log_size, bytecode_zero_eval, input_data_size_padded);
-    replacements = build_xmss_scheme_replacements(replacements);
-=======
 static EMBEDDED_ZK_DSL: include_dir::Dir<'_> = include_dir::include_dir!("$CARGO_MANIFEST_DIR/zkdsl_implem");
->>>>>>> d13cfa5d23c2edbd907afca9b598c1622f03fcbc
 
 pub const MAX_RECURSIONS: usize = 16;
 pub const MAX_XMSS_AGGREGATED: usize = 1 << 15; // TODO increase (we would need a bigger minimal memory size, totally doable)
@@ -80,7 +69,7 @@ pub(crate) fn type1_input_data_size_padded(program_log_size: usize) -> usize {
 }
 
 fn compile_main_program(program_log_size: usize, bytecode_zero_eval: F) -> Bytecode {
-    let replacements = build_replacements(program_log_size, bytecode_zero_eval);
+    let replacements = build_vm_replacements(program_log_size, bytecode_zero_eval);
 
     let source = ProgramSource::Embedded {
         entry: "main.py".to_string(),
@@ -109,7 +98,6 @@ fn compile_main_program_self_referential() -> Bytecode {
     }
 }
 
-<<<<<<< HEAD
 fn build_xmss_scheme_replacements(mut replacements: BTreeMap<String, String>) -> BTreeMap<String, String> {
     // XMSS-specific replacements
     replacements.insert("V_PLACEHOLDER".to_string(), V.to_string());
@@ -127,14 +115,7 @@ fn build_xmss_scheme_replacements(mut replacements: BTreeMap<String, String>) ->
     replacements
 }
 
-fn build_vm_replacements(
-    inner_program_log_size: usize,
-    bytecode_zero_eval: F,
-    input_data_size_padded: usize,
-) -> BTreeMap<String, String> {
-=======
-fn build_replacements(inner_program_log_size: usize, bytecode_zero_eval: F) -> BTreeMap<String, String> {
->>>>>>> d13cfa5d23c2edbd907afca9b598c1622f03fcbc
+fn build_vm_replacements(inner_program_log_size: usize, bytecode_zero_eval: F) -> BTreeMap<String, String> {
     let mut replacements = BTreeMap::new();
 
     let log_inner_bytecode = inner_program_log_size;
@@ -404,38 +385,6 @@ fn build_replacements(inner_program_log_size: usize, bytecode_zero_eval: F) -> B
     replacements.insert("STARTING_PC_PLACEHOLDER".to_string(), STARTING_PC.to_string());
     replacements.insert("ENDING_PC_PLACEHOLDER".to_string(), ENDING_PC.to_string());
 
-<<<<<<< HEAD
-=======
-    // XMSS-specific replacements
-    replacements.insert("V_PLACEHOLDER".to_string(), V.to_string());
-    replacements.insert("W_PLACEHOLDER".to_string(), W.to_string());
-    replacements.insert("TARGET_SUM_PLACEHOLDER".to_string(), TARGET_SUM.to_string());
-    replacements.insert("LOG_LIFETIME_PLACEHOLDER".to_string(), LOG_LIFETIME.to_string());
-    replacements.insert("MESSAGE_LEN_PLACEHOLDER".to_string(), MESSAGE_LEN_FE.to_string());
-    replacements.insert("RANDOMNESS_LEN_PLACEHOLDER".to_string(), RANDOMNESS_LEN_FE.to_string());
-    replacements.insert(
-        "PUBLIC_PARAM_LEN_FE_PLACEHOLDER".to_string(),
-        PUBLIC_PARAM_LEN_FE.to_string(),
-    );
-    replacements.insert(
-        "MERKLE_LEVELS_PER_CHUNK_PLACEHOLDER".to_string(),
-        MERKLE_LEVELS_PER_CHUNK_FOR_SLOT.to_string(),
-    );
-    replacements.insert("XMSS_DIGEST_LEN_PLACEHOLDER".to_string(), XMSS_DIGEST_LEN.to_string());
-
-    replacements.insert("TYPE_1_FLAG_PLACEHOLDER".to_string(), TYPE1_FLAG.to_string());
-    replacements.insert("TYPE_2_FLAG_PLACEHOLDER".to_string(), TYPE2_FLAG.to_string());
-    replacements.insert(
-        "MAX_XMSS_AGGREGATED_PLACEHOLDER".to_string(),
-        MAX_XMSS_AGGREGATED.to_string(),
-    );
-    replacements.insert(
-        "MAX_XMSS_DUPLICATES_PLACEHOLDER".to_string(),
-        MAX_XMSS_DUPLICATES.to_string(),
-    );
-    replacements.insert("MAX_RECURSIONS_PLACEHOLDER".to_string(), MAX_RECURSIONS.to_string());
-
->>>>>>> d13cfa5d23c2edbd907afca9b598c1622f03fcbc
     // Bytecode zero eval
     replacements.insert(
         "BYTECODE_ZERO_EVAL_PLACEHOLDER".to_string(),
@@ -450,7 +399,6 @@ fn build_replacements(inner_program_log_size: usize, bytecode_zero_eval: F) -> B
     replacements
 }
 
-<<<<<<< HEAD
 static SPHINCS_BYTECODE: OnceLock<Bytecode> = OnceLock::new();
 
 pub fn get_sphincs_bytecode() -> &'static Bytecode {
@@ -464,9 +412,6 @@ pub fn init_sphincs_bytecode() {
 }
 
 fn compile_sphincs_program() -> Bytecode {
-    // SPHINCS+ public input is a single 8-FE Poseidon digest — no recursive bytecode
-    // claim is embedded, so input_data_size_padded = DIGEST_LEN = 8.
-    let input_data_size_padded = DIGEST_LEN;
     // Starting guess for the bytecode log-size. Unlike XMSS there is no self-referential
     // dependency (main_sphincs.py does not embed the bytecode size), so a single compile
     // pass is expected to converge. The assertion below will fire if this guess is wrong,
@@ -477,7 +422,7 @@ fn compile_sphincs_program() -> Bytecode {
     let log_size_guess = 20;
     let bytecode_zero_eval = F::ONE;
 
-    let replacements = build_vm_replacements(log_size_guess, bytecode_zero_eval, input_data_size_padded);
+    let replacements = build_vm_replacements(log_size_guess, bytecode_zero_eval);
 
     let filepath = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("main_sphincs.py")
@@ -500,8 +445,6 @@ pub(crate) fn bytecode_reduction_sumcheck_proof_size(bytecode_point_n_vars: usiz
     DIGEST_LEN + bytecode_point_n_vars * per_round
 }
 
-=======
->>>>>>> d13cfa5d23c2edbd907afca9b598c1622f03fcbc
 fn all_air_evals_in_zk_dsl() -> String {
     let mut res = String::new();
     res += &air_eval_in_zk_dsl(ExecutionTable::<false> {});

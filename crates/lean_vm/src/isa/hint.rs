@@ -1,13 +1,9 @@
-<<<<<<< HEAD
-use crate::DIGEST_LEN;
-=======
-use crate::MIN_LOG_MEMORY_SIZE;
->>>>>>> d13cfa5d23c2edbd907afca9b598c1622f03fcbc
 use crate::core::{F, Label, SourceLocation};
 use crate::diagnostics::RunnerError;
 use crate::execution::ExecutionHistory;
 use crate::execution::memory::MemoryAccess;
 use crate::isa::operands::{MemOrConstant, MemOrFpOrConstant};
+use crate::{DIGEST_LEN, MIN_LOG_MEMORY_SIZE};
 use backend::*;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -110,7 +106,7 @@ pub enum CustomHint {
     /// x = a0 + a1.4 + a2.4^2 + a3.4^3 + ... + a11.4^11 + b.2^24
     /// and ai < 4, b < 2^7 - 1
     /// The decomposition is unique, and always exists (except for x = -1)
-    /// 
+    ///
     DecomposeWots,
     DecomposeBitsFors,
     DecomposeBitsXMSS,
@@ -145,15 +141,10 @@ impl CustomHint {
 
     pub fn n_args(&self) -> usize {
         match self {
-<<<<<<< HEAD
             Self::DecomposeWots => 5,
             Self::DecomposeBitsFors => 4,
-            Self::DecomposeBitsXMSS => 5,
-            Self::DecomposeBitsMerkleWhir => 4,
-=======
             Self::DecomposeBitsXMSS => 4,
             Self::DecomposeBitsMerkleWhir => 3,
->>>>>>> d13cfa5d23c2edbd907afca9b598c1622f03fcbc
             Self::DecomposeBits => 4,
             Self::LessThan => 3,
             Self::Log2Ceil => 2,
@@ -176,7 +167,10 @@ impl CustomHint {
                 let chunk_size_bits = args[4].read_value(ctx.memory, ctx.fp)?.to_usize();
 
                 // Ensure we only use at most the bottom 24 bits of each FE
-                assert!(num_chunks * chunk_size_bits <= 24, "DecomposeWots hint supports decomposing up to 24 bits per FE");
+                assert!(
+                    num_chunks * chunk_size_bits <= 24,
+                    "DecomposeWots hint supports decomposing up to 24 bits per FE"
+                );
 
                 // Implementation for decomposing WOTS values
                 for i in 0..DIGEST_LEN {
@@ -196,7 +190,7 @@ impl CustomHint {
                 let num_groups = args[3].read_value(ctx.memory, ctx.fp)?.to_usize();
 
                 assert!(leaf_index_decompose < (1 << (chunk_size * num_groups)));
-                
+
                 let chunk_size_mask = (1 << chunk_size) - 1;
                 let mut memory_index = decomposed_ptr;
                 for i in 0..num_groups {
@@ -204,7 +198,7 @@ impl CustomHint {
                     ctx.memory.set(memory_index, value)?;
                     memory_index += 1;
                 }
-            },
+            }
             Self::DecomposeBitsXMSS => {
                 let decomposed_ptr = args[0].read_value(ctx.memory, ctx.fp)?.to_usize();
                 let to_decompose_ptr = args[1].read_value(ctx.memory, ctx.fp)?.to_usize();

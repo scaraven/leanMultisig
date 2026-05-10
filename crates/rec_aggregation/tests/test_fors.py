@@ -1,6 +1,6 @@
 from snark_lib import *
-from ..sphincs_fors import *
-from ..utils import *
+from ..zkdsl_implem.sphincs_fors import *
+from ..zkdsl_implem.utils import *
 
 
 def main():
