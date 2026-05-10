@@ -81,9 +81,7 @@ fn build_signer_hints(
     message: &[F; MESSAGE_LEN_FE],
     hints: &mut HashMap<String, Vec<Vec<F>>>,
 ) {
-    let mut right = [F::ZERO; DIGEST_LEN];
-    right[0] = message[8];
-    let message_digest = poseidon16_compress_pair(&message[0..8].try_into().unwrap(), &right);
+    let message_digest = poseidon16_compress_pair(message, &[F::ZERO; DIGEST_LEN]);
 
     let (leaf_indices, fors_indices, leaf_uppers, fors_uppers) = extract_digest_parts(&message_digest);
 

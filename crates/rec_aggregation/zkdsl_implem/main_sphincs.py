@@ -12,7 +12,7 @@ def main():
     No recursion, no slot, no bytecode claim reduction.
 
     Public input (8 FEs at address 0):
-        hash of [ n_sigs(1) | pubkeys(n_sigs x DIGEST_LEN) | messages(n_sigs x MESSAGE_LEN) ]
+        hash of [ n_sigs(1) | pubkeys(n_sigs x DIGEST_LEN) | messages(n_sigs x MESSAGE_LEN) ]  # MESSAGE_LEN = 8
         The commitment is built by chaining Poseidon absorptions without copying:
             h0 = poseidon(ZERO_VEC, [n_sigs, 0, 0, ..., 0])
             h1 = slice_hash_with_iv_dynamic_unroll(pubkeys, ...) continued from h0

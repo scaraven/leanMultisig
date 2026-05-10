@@ -51,9 +51,7 @@ impl SphincsSecretKey {
 
     pub fn sign(&self, message: &[F; MESSAGE_LEN_FE]) -> Result<SphincsSig, Box<dyn std::error::Error>> {
         // Hash the message to a digest so that we can extract the tree and leaf indices for the FORS signature.
-        let mut right: [F; 8] = Default::default();
-        right[0] = message[8];
-        let message_digest = poseidon16_compress_pair(&message[0..8].try_into().unwrap(), &right);
+        let message_digest = poseidon16_compress_pair(message, &[F::ZERO; 8]);
 
         let (leaf_idx, tree_address, fors_indices) = extract_digest_hash(&message_digest);
 
@@ -177,9 +175,7 @@ pub fn extract_digest_parts(
 
 impl SphincsPublicKey {
     pub fn verify(&self, message: &[F; MESSAGE_LEN_FE], sig: &SphincsSig) -> bool {
-        let mut right: [F; 8] = Default::default();
-        right[0] = message[8];
-        let message_digest = poseidon16_compress_pair(&message[0..8].try_into().unwrap(), &right);
+        let message_digest = poseidon16_compress_pair(message, &[F::ZERO; 8]);
 
         let (leaf_idx, tree_address, fors_indices) = extract_digest_hash(&message_digest);
 

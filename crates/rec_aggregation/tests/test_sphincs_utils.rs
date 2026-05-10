@@ -2,7 +2,7 @@ use backend::PrimeCharacteristicRing;
 use lean_compiler::*;
 use lean_vm::*;
 use rand::{RngExt, SeedableRng, rngs::StdRng};
-use rec_aggregation::{PREAMBLE_MEMORY_LEN, sphincs::split_leaf_upper};
+use rec_aggregation::{PREAMBLE_MEMORY_LEN, build_vm_replacements, sphincs::split_leaf_upper};
 use sphincs::{
     RANDOMNESS_LEN_FE, SPX_FORS_HEIGHT, SPX_FORS_TREES, SPX_WOTS_LEN, SPX_WOTS_W, fold_roots, fors_key_gen,
     fors_sig_to_flat, fors_sign, fors_sign_single_tree,
@@ -21,11 +21,16 @@ fn run_on_large_stack<F: Send + 'static>(f: impl FnOnce() -> F + Send + 'static)
         .unwrap()
 }
 
+fn make_bytecode(test_file: &str) -> lean_vm::Bytecode {
+    let path = format!("{}/tests/{}", env!("CARGO_MANIFEST_DIR"), test_file);
+    let replacements = build_vm_replacements(18, F::ONE);
+    compile_program_with_flags(&ProgramSource::Filepath(path), CompilationFlags { replacements })
+}
+
 #[test]
 fn test_fold_roots_sphincs() {
     run_on_large_stack(|| {
-        let path = format!("{}/tests/test_fold_roots.py", env!("CARGO_MANIFEST_DIR"));
-        let bytecode = compile_program(&ProgramSource::Filepath(path));
+        let bytecode = make_bytecode("test_fold_roots.py");
 
         let mut rng = StdRng::seed_from_u64(0);
         let data: [[F; DIGEST_LEN]; SPX_FORS_TREES] = std::array::from_fn(|_| std::array::from_fn(|_| rng.random()));
@@ -72,8 +77,7 @@ fn build_wots_hints(
 #[test]
 fn test_sphincs_wots_encode_complete() {
     run_on_large_stack(|| {
-        let path = format!("{}/tests/test_sphincs_wots.py", env!("CARGO_MANIFEST_DIR"));
-        let bytecode = compile_program(&ProgramSource::Filepath(path));
+        let bytecode = make_bytecode("test_sphincs_wots.py");
 
         let mut rng = StdRng::seed_from_u64(0);
 
@@ -200,9 +204,7 @@ fn test_sphincs_wots_encode_complete() {
 #[test]
 fn test_sphincs_fors_merkle_verify() {
     run_on_large_stack(|| {
-        let path = format!("{}/tests/test_fors_tree.py", env!("CARGO_MANIFEST_DIR"));
-        // Just compile the program for now
-        let bytecode = compile_program(&ProgramSource::Filepath(path));
+        let bytecode = make_bytecode("test_fors_tree.py");
 
         let mut rng = StdRng::seed_from_u64(0);
         let seed: [u8; 20] = rng.random();
@@ -234,9 +236,7 @@ fn test_sphincs_fors_merkle_verify() {
 #[test]
 fn test_sphincs_fors_verify() {
     run_on_large_stack(|| {
-        let path = format!("{}/tests/test_fors.py", env!("CARGO_MANIFEST_DIR"));
-        // Just compile the program for now
-        let bytecode = compile_program(&ProgramSource::Filepath(path));
+        let bytecode = make_bytecode("test_fors.py");
 
         let mut rng = StdRng::seed_from_u64(0);
         let seed: [u8; 20] = rng.random();
@@ -290,8 +290,7 @@ fn test_sphincs_fors_verify() {
 #[test]
 fn test_decompose_message_digest() {
     run_on_large_stack(|| {
-        let path = format!("{}/tests/test_message_decompose.py", env!("CARGO_MANIFEST_DIR"));
-        let bytecode = compile_program(&ProgramSource::Filepath(path));
+        let bytecode = make_bytecode("test_message_decompose.py");
 
         let mut rng = StdRng::seed_from_u64(42);
 

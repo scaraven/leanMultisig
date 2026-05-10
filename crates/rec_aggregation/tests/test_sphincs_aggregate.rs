@@ -1,7 +1,7 @@
 use backend::PrimeCharacteristicRing;
 use lean_compiler::*;
 use lean_vm::*;
-use rec_aggregation::{PREAMBLE_MEMORY_LEN, sphincs::split_leaf_upper};
+use rec_aggregation::{PREAMBLE_MEMORY_LEN, build_vm_replacements, sphincs::split_leaf_upper};
 use sphincs::{
     HypertreeSecretKey, HypertreeSignature, MESSAGE_LEN_FE, RANDOMNESS_LEN_FE, SPX_D, SPX_TREE_BITS, SPX_TREE_HEIGHT,
     SPX_WOTS_LEN, core::SphincsSecretKey, fors_sig_to_flat, hypertree_sign,
@@ -58,9 +58,7 @@ fn build_sphincs_hints(seed: [u8; 20], message: [F; MESSAGE_LEN_FE]) -> HashMap<
     let pk = sphincs::HypertreeSecretKey::new(seed).public_key().0;
     let sig = sk.sign(&message).expect("failed to sign message");
 
-    let mut right = [F::ZERO; DIGEST_LEN];
-    right[0] = message[8];
-    let message_digest = poseidon16_compress_pair(&message[0..8].try_into().unwrap(), &right);
+    let message_digest = poseidon16_compress_pair(&message, &[F::ZERO; DIGEST_LEN]);
 
     let (leaf_indices, fors_indices, leaf_uppers, fors_uppers) = sphincs::core::extract_digest_parts(&message_digest);
 
@@ -93,11 +91,16 @@ fn build_sphincs_hints(seed: [u8; 20], message: [F; MESSAGE_LEN_FE]) -> HashMap<
     ])
 }
 
+fn make_bytecode(test_file: &str) -> lean_vm::Bytecode {
+    let path = format!("{}/tests/{}", env!("CARGO_MANIFEST_DIR"), test_file);
+    let replacements = build_vm_replacements(18, F::ONE);
+    compile_program_with_flags(&ProgramSource::Filepath(path), CompilationFlags { replacements })
+}
+
 #[test]
 fn profile_sphincs_verify() {
     run_on_large_stack(|| {
-        let path = format!("{}/tests/test_sphincs_aggregate.py", env!("CARGO_MANIFEST_DIR"));
-        let bytecode = compile_program(&ProgramSource::Filepath(path));
+        let bytecode = make_bytecode("test_sphincs_aggregate.py");
 
         let seed = [7u8; 20];
         let message = [F::from_usize(0); MESSAGE_LEN_FE];
@@ -115,8 +118,7 @@ fn profile_sphincs_verify() {
 #[test]
 fn test_sphincs_aggregate_verify() {
     run_on_large_stack(|| {
-        let path = format!("{}/tests/test_sphincs_aggregate.py", env!("CARGO_MANIFEST_DIR"));
-        let bytecode = compile_program(&ProgramSource::Filepath(path));
+        let bytecode = make_bytecode("test_sphincs_aggregate.py");
 
         let seed = [7u8; 20];
         let message = [F::from_usize(0); MESSAGE_LEN_FE];
@@ -134,8 +136,7 @@ fn test_sphincs_aggregate_verify() {
 #[test]
 fn test_hypertree_merkle_verify() {
     run_on_large_stack(|| {
-        let path = format!("{}/tests/test_hypertree_merkle_verify.py", env!("CARGO_MANIFEST_DIR"));
-        let bytecode = compile_program(&ProgramSource::Filepath(path));
+        let bytecode = make_bytecode("test_hypertree_merkle_verify.py");
 
         let seed = [9u8; 20];
         let fors_pk = [F::ZERO; DIGEST_LEN];
@@ -176,8 +177,7 @@ fn test_hypertree_merkle_verify() {
 #[test]
 fn test_hypertree_verify() {
     run_on_large_stack(|| {
-        let path = format!("{}/tests/test_hypertree_verify.py", env!("CARGO_MANIFEST_DIR"));
-        let bytecode = compile_program(&ProgramSource::Filepath(path));
+        let bytecode = make_bytecode("test_hypertree_verify.py");
 
         let seed = [11u8; 20];
         let fors_pk = [F::ZERO; DIGEST_LEN];

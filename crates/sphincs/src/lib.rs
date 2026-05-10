@@ -39,7 +39,7 @@ pub const LOG_LIFETIME: usize = 30; // 2^30 total signatures
 
 // --- Encoding lengths ---
 pub const RANDOMNESS_LEN_FE: usize = 7;
-pub const MESSAGE_LEN_FE: usize = 9;
+pub const MESSAGE_LEN_FE: usize = 8;
 
 // --- FORS message derivation (bit layout) ---
 // bits  0-10  : leaf_idx      (SPX_TREE_HEIGHT = 11 bits)

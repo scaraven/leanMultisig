@@ -82,9 +82,8 @@ def sphincs_verify(pk, message):
     # Top-level SPHINCS+ signature verifier.
     #
     # Steps:
-    #   1. Hash the MESSAGE_LEN (9)-FE message to an 8-FE message digest:
-    #        right[0] = message[8]
-    #        message_digest = poseidon(message[0..8], right)   (1 Poseidon call)
+    #   1. Hash the MESSAGE_LEN (8)-FE message to an 8-FE message digest:
+    #        message_digest = poseidon(message, ZERO_VEC)   (1 Poseidon call)
     #   2. Decompose the digest once via decompose_message_digest to obtain
     #      fors_indices[9] and layer_leaf_indices[3].
     #   3. Verify FORS: fors_pubkey = fors_verify(fors_indices).
@@ -93,17 +92,13 @@ def sphincs_verify(pk, message):
     #
     # Inputs:
     #   pk            — DIGEST_LEN FEs: signer's SPHINCS+ public key
-    #   message       — MESSAGE_LEN (9) FEs: shared message
+    #   message       — MESSAGE_LEN (8) FEs: shared message
     #
     # Postcondition:
     #   Asserts the signature is valid for (pk, message).
     #   Fails the circuit if any sub-verification does not hold.
-    right = Array(DIGEST_LEN)
-    right[0] = message[8]
-    set_to_7_zeros(right + 1)
-
     message_digest = Array(DIGEST_LEN)
-    poseidon16_compress(message, right, message_digest)
+    poseidon16_compress(message, ZERO_VEC_PTR, message_digest)
 
     indices = decompose_message_digest(message_digest)
     

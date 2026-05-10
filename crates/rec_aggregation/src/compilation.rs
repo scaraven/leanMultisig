@@ -115,7 +115,7 @@ fn build_xmss_scheme_replacements(mut replacements: BTreeMap<String, String>) ->
     replacements
 }
 
-fn build_vm_replacements(inner_program_log_size: usize, bytecode_zero_eval: F) -> BTreeMap<String, String> {
+pub fn build_vm_replacements(inner_program_log_size: usize, bytecode_zero_eval: F) -> BTreeMap<String, String> {
     let mut replacements = BTreeMap::new();
 
     let log_inner_bytecode = inner_program_log_size;
@@ -425,7 +425,7 @@ fn compile_sphincs_program() -> Bytecode {
     let replacements = build_vm_replacements(log_size_guess, bytecode_zero_eval);
 
     let filepath = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("main_sphincs.py")
+        .join("zkdsl_implem/main_sphincs.py")
         .to_str()
         .unwrap()
         .to_string();

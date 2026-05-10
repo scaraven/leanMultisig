@@ -1,5 +1,5 @@
 use clap::Parser;
-use rec_aggregation::benchmark::{AggregationTopology, biggest_leaf, run_aggregation_benchmark};
+use rec_aggregation::benchmark::{AggregationTopology, biggest_leaf, run_aggregation_benchmark, run_sphincs_benchmark};
 
 #[cfg(not(feature = "standard-alloc"))]
 #[global_allocator]
@@ -111,6 +111,13 @@ fn main() {
                 overlap: 0,
             };
             run_with_warmup(&topology, tracing, json);
+        }
+        Cli::Sphincs {
+            n_signatures,
+            log_inv_rate,
+            tracing,
+        } => {
+            run_sphincs_benchmark(n_signatures, log_inv_rate, tracing);
         }
         Cli::FancyAggregation { json } => {
             let topology = AggregationTopology {

@@ -15,6 +15,7 @@ mod type_2_aggregation;
 use backend::{Evaluation, Proof, ProofError, RawProof};
 pub use compilation::{
     MAX_RECURSIONS, MAX_XMSS_AGGREGATED, MAX_XMSS_DUPLICATES, NUM_REPEATED_ONES, PREAMBLE_MEMORY_LEN, ZERO_VEC_LEN,
+    build_vm_replacements,
 };
 
 use lean_vm::{DIGEST_LEN, EF, F};
