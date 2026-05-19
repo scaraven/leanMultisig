@@ -122,6 +122,9 @@ def poly_eq_ee(a, b, result, length=None):
 def hint_decompose_bits(value, bits, n_bits):
     _ = value, bits, n_bits
 
+def hint_decompose_bits_little(value, bits, n_bits):
+    _ = value, bits, n_bits
+
 def hint_less_than(a, b, result_ptr):
     _ = a, b, result_ptr
 

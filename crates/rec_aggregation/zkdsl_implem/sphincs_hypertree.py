@@ -27,7 +27,7 @@ def hypertree_merkle_verify(layer_leaf_index, leaf_node, auth_path, root_out):
 
     # Hint the low bit, constrain it to {0,1}, then derive the upper 10 bits.
     bit0 = Array(1)
-    hint_decompose_bits(layer_leaf_index, bit0, 1, LITTLE_ENDIAN)
+    hint_decompose_bits_little(layer_leaf_index, bit0, 1)
     assert bit0[0] * (1 - bit0[0]) == 0
 
     # upper_10 = (layer_leaf_index - bit0) / 2; decompose into two MERKLE_LEVEL_STEP-bit chunks.

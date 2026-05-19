@@ -112,16 +112,18 @@ pub enum CustomHint {
     DecomposeBitsXMSS,
     DecomposeBitsMerkleWhir,
     DecomposeBits,
+    DecomposeBitsLittle,
     LessThan,
     Log2Ceil,
 }
 
-pub const CUSTOM_HINTS: [CustomHint; 7] = [
+pub const CUSTOM_HINTS: [CustomHint; 8] = [
     CustomHint::DecomposeWots,
     CustomHint::DecomposeBitsFors,
     CustomHint::DecomposeBitsXMSS,
     CustomHint::DecomposeBitsMerkleWhir,
     CustomHint::DecomposeBits,
+    CustomHint::DecomposeBitsLittle,
     CustomHint::LessThan,
     CustomHint::Log2Ceil,
 ];
@@ -134,6 +136,7 @@ impl CustomHint {
             Self::DecomposeBitsXMSS => "hint_decompose_bits_xmss",
             Self::DecomposeBitsMerkleWhir => "hint_decompose_bits_merkle_whir",
             Self::DecomposeBits => "hint_decompose_bits",
+            Self::DecomposeBitsLittle => "hint_decompose_bits_little",
             Self::LessThan => "hint_less_than",
             Self::Log2Ceil => "hint_log2_ceil",
         }
@@ -146,6 +149,7 @@ impl CustomHint {
             Self::DecomposeBitsXMSS => 4,
             Self::DecomposeBitsMerkleWhir => 3,
             Self::DecomposeBits => 3,
+            Self::DecomposeBitsLittle => 3,
             Self::LessThan => 3,
             Self::Log2Ceil => 2,
         }
@@ -236,6 +240,14 @@ impl CustomHint {
                 assert!(num_bits <= F::bits());
                 ctx.memory
                     .set_slice(memory_index, &to_big_endian_in_field::<F>(to_decompose, num_bits))?
+            }
+            Self::DecomposeBitsLittle => {
+                let to_decompose = args[0].read_value(ctx.memory, ctx.fp)?.to_usize();
+                let memory_index = args[1].read_value(ctx.memory, ctx.fp)?.to_usize();
+                let num_bits = args[2].read_value(ctx.memory, ctx.fp)?.to_usize();
+                assert!(num_bits <= F::bits());
+                ctx.memory
+                    .set_slice(memory_index, &to_little_endian_in_field::<F>(to_decompose, num_bits))?
             }
             Self::LessThan => {
                 let a = args[0].read_value(ctx.memory, ctx.fp)?;

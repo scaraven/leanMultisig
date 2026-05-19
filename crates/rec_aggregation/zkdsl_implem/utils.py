@@ -403,13 +403,6 @@ def copy_7(a, b):
     dot_product_ee(a + (7 - DIM), ONE_EF_PTR, b + (7 - DIM))
     return
 
-
-@inline
-def copy_8(a, b):
-    dot_product_ee(a, ONE_EF_PTR, b)
-    dot_product_ee(a + (8 - DIM), ONE_EF_PTR, b + (8 - DIM))
-    return
-
 def set_to_16_zeros(a):
     zero_ptr = ZERO_VEC_PTR
     dot_product_ee(a, ONE_EF_PTR, zero_ptr)

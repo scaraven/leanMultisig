@@ -5,14 +5,13 @@ use lean_prover::{
     WHIR_SUBSEQUENT_FOLDING_FACTOR, default_whir_config,
 };
 use lean_vm::*;
-use sphincs::V_GRINDING;
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::OnceLock;
 use sub_protocols::{N_VARS_TO_SEND_GKR_COEFFS, min_stacked_n_vars, total_whir_statements};
 use tracing::instrument;
 use utils::Counter;
-use xmss::{LOG_LIFETIME, MESSAGE_LEN_FE, RANDOMNESS_LEN_FE, TARGET_SUM, V, W};
+use xmss::{LOG_LIFETIME, MESSAGE_LEN_FE};
 
 use crate::type_1_aggregation::TWEAK_TABLE_SIZE_FE_PADDED;
 
