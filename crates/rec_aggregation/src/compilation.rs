@@ -395,7 +395,10 @@ fn compile_sphincs_program() -> Bytecode {
         entry: "main_sphincs.py".to_string(),
         dir: &EMBEDDED_ZK_DSL,
     };
-    compile_program_with_flags(&source, CompilationFlags { replacements })
+    let bytecode = compile_program_with_flags(&source, CompilationFlags { replacements });
+    assert_eq!(bytecode.log_size(), log_size_guess);
+    assert_eq!(bytecode.instructions_multilinear[0], bytecode_zero_eval);
+    bytecode
 }
 
 pub(crate) fn bytecode_reduction_sumcheck_proof_size(bytecode_point_n_vars: usize) -> usize {

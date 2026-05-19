@@ -593,7 +593,7 @@ pub fn run_sphincs_benchmark(n_sigs: usize, log_inv_rate: usize, tracing: bool) 
     init_sphincs_bytecode();
     println!(
         "SPHINCS+ program: {} instructions\n",
-        pretty_integer(get_sphincs_bytecode().instructions_multilinear.len())
+        pretty_integer(get_sphincs_bytecode().size())
     );
 
     let cache = get_sphincs_benchmark_signatures();
