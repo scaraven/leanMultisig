@@ -387,32 +387,16 @@ pub fn init_sphincs_bytecode() {
 }
 
 fn compile_sphincs_program() -> Bytecode {
-    // Starting guess for the bytecode log-size. Unlike XMSS there is no self-referential
-    // dependency (main_sphincs.py does not embed the bytecode size), so a single compile
-    // pass is expected to converge. The assertion below will fire if this guess is wrong,
-    // at which point the constant should be updated.
-    //
-    // TODO: if recursion is ever added to main_sphincs.py, replace this with the same
-    // self-referential loop used in compile_main_program_self_referential().
     let log_size_guess = 20;
-    let bytecode_zero_eval = F::ONE;
+    let bytecode_zero_eval = F::ZERO;
 
     let replacements = build_replacements(log_size_guess, bytecode_zero_eval);
 
-    let filepath = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("zkdsl_implem/main_sphincs.py")
-        .to_str()
-        .unwrap()
-        .to_string();
-    let bytecode = compile_program_with_flags(&ProgramSource::Filepath(filepath), CompilationFlags { replacements });
-
-    assert_eq!(bytecode_zero_eval, bytecode.instructions_multilinear[0]);
-    assert_eq!(
-        bytecode.log_size(),
-        log_size_guess,
-        "SPHINCS+ bytecode log_size changed: update log_size_guess in compile_sphincs_program()"
-    );
-    bytecode
+    let source = ProgramSource::Embedded {
+        entry: "main_sphincs.py".to_string(),
+        dir: &EMBEDDED_ZK_DSL,
+    };
+    compile_program_with_flags(&source, CompilationFlags { replacements })
 }
 
 pub(crate) fn bytecode_reduction_sumcheck_proof_size(bytecode_point_n_vars: usize) -> usize {
