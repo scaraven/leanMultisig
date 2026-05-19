@@ -69,7 +69,7 @@ pub(crate) fn type1_input_data_size_padded(program_log_size: usize) -> usize {
 }
 
 fn compile_main_program(program_log_size: usize, bytecode_zero_eval: F) -> Bytecode {
-    let replacements = build_vm_replacements(program_log_size, bytecode_zero_eval);
+    let replacements = build_replacements(program_log_size, bytecode_zero_eval);
 
     let source = ProgramSource::Embedded {
         entry: "main.py".to_string(),
@@ -98,7 +98,8 @@ fn compile_main_program_self_referential() -> Bytecode {
     panic!("`compile_main_program_self_referential` did not converge");
 }
 
-fn build_replacements(log_inner_bytecode: usize, bytecode_zero_eval: F) -> BTreeMap<String, String> {
+
+pub fn build_replacements(log_inner_bytecode: usize, bytecode_zero_eval: F) -> BTreeMap<String, String> {
     let ending_pc = (1 << log_inner_bytecode) - 1;
     let min_stacked = min_stacked_n_vars(log_inner_bytecode);
 
@@ -397,7 +398,7 @@ fn compile_sphincs_program() -> Bytecode {
     let log_size_guess = 20;
     let bytecode_zero_eval = F::ONE;
 
-    let replacements = build_vm_replacements(log_size_guess, bytecode_zero_eval);
+    let replacements = build_replacements(log_size_guess, bytecode_zero_eval);
 
     let filepath = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("zkdsl_implem/main_sphincs.py")

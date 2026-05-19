@@ -623,7 +623,7 @@ pub fn run_sphincs_benchmark(n_sigs: usize, log_inv_rate: usize, tracing: bool) 
         s::R
     );
     let plain_len = plain_desc.chars().count();
-    let mut display = LiveTree::new(vec![desc], vec![plain_len], false);
+    let mut display = LiveTree::new(vec![desc], vec![plain_len], false, false);
 
     if !tracing {
         display.print_initial();
@@ -644,6 +644,9 @@ pub fn run_sphincs_benchmark(n_sigs: usize, log_inv_rate: usize, tracing: bool) 
             0,
             &NodeStats {
                 time_secs: elapsed,
+                // TODO: Implement proper repeated runs and CI calculation for SPHINCS+ benchmarks as well.
+                time_ci_secs: 0.0,
+                samples: 1,
                 proof_kib,
                 cycles: meta.cycles,
                 memory: meta.memory,

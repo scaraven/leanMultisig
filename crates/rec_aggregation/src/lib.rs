@@ -7,7 +7,7 @@ use utils::poseidon_compress_slice;
 
 pub mod benchmark;
 mod bytecode_claims;
-mod compilation;
+pub mod compilation;
 pub mod sphincs;
 mod type_1_aggregation;
 mod type_2_aggregation;

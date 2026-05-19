@@ -1,7 +1,7 @@
 use backend::PrimeCharacteristicRing;
 use lean_compiler::*;
 use lean_vm::*;
-use rec_aggregation::{PREAMBLE_MEMORY_LEN, build_vm_replacements, sphincs::split_leaf_upper};
+use rec_aggregation::{PREAMBLE_MEMORY_LEN, compilation::build_replacements, sphincs::split_leaf_upper};
 use sphincs::{
     HypertreeSecretKey, HypertreeSignature, MESSAGE_LEN_FE, RANDOMNESS_LEN_FE, SPX_D, SPX_TREE_BITS, SPX_TREE_HEIGHT,
     SPX_WOTS_LEN, core::SphincsSecretKey, fors_sig_to_flat, hypertree_sign,
@@ -93,7 +93,7 @@ fn build_sphincs_hints(seed: [u8; 20], message: [F; MESSAGE_LEN_FE]) -> HashMap<
 
 fn make_bytecode(test_file: &str) -> lean_vm::Bytecode {
     let path = format!("{}/tests/{}", env!("CARGO_MANIFEST_DIR"), test_file);
-    let replacements = build_vm_replacements(18, F::ONE);
+    let replacements = build_replacements(18, F::ONE);
     compile_program_with_flags(&ProgramSource::Filepath(path), CompilationFlags { replacements })
 }
 

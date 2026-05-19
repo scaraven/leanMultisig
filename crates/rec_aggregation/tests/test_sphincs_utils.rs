@@ -2,7 +2,7 @@ use backend::PrimeCharacteristicRing;
 use lean_compiler::*;
 use lean_vm::*;
 use rand::{RngExt, SeedableRng, rngs::StdRng};
-use rec_aggregation::{PREAMBLE_MEMORY_LEN, build_vm_replacements, sphincs::split_leaf_upper};
+use rec_aggregation::{PREAMBLE_MEMORY_LEN, compilation::build_replacements, sphincs::split_leaf_upper};
 use sphincs::{
     RANDOMNESS_LEN_FE, SPX_FORS_HEIGHT, SPX_FORS_TREES, SPX_WOTS_LEN, SPX_WOTS_W, fold_roots, fors_key_gen,
     fors_sig_to_flat, fors_sign, fors_sign_single_tree,
@@ -23,7 +23,7 @@ fn run_on_large_stack<F: Send + 'static>(f: impl FnOnce() -> F + Send + 'static)
 
 fn make_bytecode(test_file: &str) -> lean_vm::Bytecode {
     let path = format!("{}/tests/{}", env!("CARGO_MANIFEST_DIR"), test_file);
-    let replacements = build_vm_replacements(18, F::ONE);
+    let replacements = build_replacements(18, F::ONE);
     compile_program_with_flags(&ProgramSource::Filepath(path), CompilationFlags { replacements })
 }
 
