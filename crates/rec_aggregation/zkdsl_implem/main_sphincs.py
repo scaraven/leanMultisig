@@ -59,9 +59,9 @@ def main():
     seg_nsigs = Array(DIGEST_LEN)
     poseidon16_compress(ZERO_VEC_PTR, n_sigs_chunk, seg_nsigs)
 
-    seg_pubkeys = slice_hash_with_iv_dynamic_unroll(pubkeys, n_sigs * DIGEST_LEN, MAX_LOG_N_SIGS + 4)
+    seg_pubkeys = slice_hash_with_iv_dynamic_unroll(pubkeys, n_sigs, MAX_LOG_N_SIGS + 4)
 
-    seg_messages = slice_hash_with_iv_dynamic_unroll(messages, n_sigs * MESSAGE_LEN, MAX_LOG_N_SIGS + 4)
+    seg_messages = slice_hash_with_iv_dynamic_unroll(messages, n_sigs, MAX_LOG_N_SIGS + 4)
 
     h01 = Array(DIGEST_LEN)
     poseidon16_compress(seg_nsigs, seg_pubkeys, h01)

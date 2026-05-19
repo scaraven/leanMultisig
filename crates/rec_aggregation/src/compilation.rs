@@ -6,7 +6,6 @@ use lean_prover::{
 };
 use lean_vm::*;
 use std::collections::{BTreeMap, HashMap};
-use std::path::Path;
 use std::sync::OnceLock;
 use sub_protocols::{N_VARS_TO_SEND_GKR_COEFFS, min_stacked_n_vars, total_whir_statements};
 use tracing::instrument;
