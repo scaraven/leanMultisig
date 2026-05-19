@@ -3,8 +3,9 @@ use lean_compiler::*;
 use lean_vm::*;
 use rec_aggregation::{PREAMBLE_MEMORY_LEN, compilation::build_replacements, sphincs::split_leaf_upper};
 use sphincs::{
-    HypertreeSecretKey, HypertreeSignature, MESSAGE_LEN_FE, RANDOMNESS_LEN_FE, SPX_D, SPX_TREE_BITS, SPX_TREE_HEIGHT,
-    SPX_WOTS_LEN, core::SphincsSecretKey, fors_sig_to_flat, hypertree_sign,
+    HypertreeSecretKey, HypertreeSignature, MESSAGE_LEN_FE, MSG_RANDOMNESS_LEN_FE, RANDOMNESS_LEN_FE, SPX_D,
+    SPX_TREE_BITS, SPX_TREE_HEIGHT, SPX_WOTS_LEN, core::{SphincsSecretKey, make_digest_right}, fors_sig_to_flat,
+    hypertree_sign,
 };
 use std::collections::HashMap;
 use utils::poseidon16_compress_pair;
@@ -58,7 +59,7 @@ fn build_sphincs_hints(seed: [u8; 20], message: [F; MESSAGE_LEN_FE]) -> HashMap<
     let pk = sphincs::HypertreeSecretKey::new(seed).public_key().0;
     let sig = sk.sign(&message).expect("failed to sign message");
 
-    let message_digest = poseidon16_compress_pair(&message, &[F::ZERO; DIGEST_LEN]);
+    let message_digest = poseidon16_compress_pair(&message, &make_digest_right(&sig.randomness));
 
     let (leaf_indices, fors_indices, leaf_uppers, fors_uppers) = sphincs::core::extract_digest_parts(&message_digest);
 
@@ -82,6 +83,7 @@ fn build_sphincs_hints(seed: [u8; 20], message: [F; MESSAGE_LEN_FE]) -> HashMap<
     HashMap::from([
         ("pk".to_string(), vec![pk.to_vec()]),
         ("message".to_string(), vec![message.to_vec()]),
+        ("randomness".to_string(), vec![sig.randomness[..MSG_RANDOMNESS_LEN_FE].to_vec()]),
         ("digest_indices".to_string(), vec![digest_indices]),
         ("digest_uppers_low".to_string(), vec![digest_uppers_low]),
         ("digest_uppers_high".to_string(), vec![digest_uppers_high]),

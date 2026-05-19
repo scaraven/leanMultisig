@@ -6,8 +6,8 @@ use lean_vm::{DIGEST_LEN, ExecutionMetadata, ExecutionWitness, F};
 use serde::{Deserialize, Serialize};
 use sphincs::SPX_TREE_HEIGHT;
 use sphincs::{
-    MESSAGE_LEN_FE,
-    core::{SphincsPublicKey, SphincsSig, extract_digest_parts},
+    MESSAGE_LEN_FE, MSG_RANDOMNESS_LEN_FE,
+    core::{SphincsPublicKey, SphincsSig, extract_digest_parts, make_digest_right},
     fors_sig_to_flat,
 };
 use std::collections::HashMap;
@@ -81,7 +81,7 @@ fn build_signer_hints(
     message: &[F; MESSAGE_LEN_FE],
     hints: &mut HashMap<String, Vec<Vec<F>>>,
 ) {
-    let message_digest = poseidon16_compress_pair(message, &[F::ZERO; DIGEST_LEN]);
+    let message_digest = poseidon16_compress_pair(message, &make_digest_right(&sig.randomness));
 
     let (leaf_indices, fors_indices, leaf_uppers, fors_uppers) = extract_digest_parts(&message_digest);
 
@@ -94,6 +94,10 @@ fn build_signer_hints(
 
     let digest_fors_uppers: Vec<F> = fors_uppers.iter().map(|&u| F::from_usize(u)).collect();
 
+    hints
+        .entry("randomness".to_string())
+        .or_default()
+        .push(sig.randomness[..MSG_RANDOMNESS_LEN_FE].to_vec());
     hints
         .entry("digest_indices".to_string())
         .or_default()

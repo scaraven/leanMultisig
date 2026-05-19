@@ -1,13 +1,22 @@
 use backend::{PrimeCharacteristicRing, PrimeField32};
+use rand::random;
 use serde::{Deserialize, Serialize};
 use utils::poseidon16_compress_pair;
 
 use crate::fors::ForsSignature;
 use crate::hypertree::HypertreeSignature;
 use crate::{
-    DIGEST_SIZE, Digest, F, ForsPublicKey, ForsSecretKey, HypertreeSecretKey, MESSAGE_LEN_FE, SPX_FORS_HEIGHT,
-    SPX_FORS_TREES, SPX_TREE_HEIGHT, fors, hypertree,
+    DIGEST_SIZE, Digest, F, ForsPublicKey, ForsSecretKey, HypertreeSecretKey, MESSAGE_LEN_FE, MSG_RANDOMNESS_LEN_FE,
+    SPX_FORS_HEIGHT, SPX_FORS_TREES, SPX_TREE_HEIGHT, fors, hypertree,
 };
+
+/// Build the 8-FE right-half for the message digest Poseidon call from `r`.
+/// Slots 0..MSG_RANDOMNESS_LEN_FE hold `r`; remaining slots are zero.
+pub fn make_digest_right(r: &[F; MSG_RANDOMNESS_LEN_FE]) -> Digest {
+    let mut right = [F::ZERO; DIGEST_SIZE];
+    right[..MSG_RANDOMNESS_LEN_FE].copy_from_slice(r);
+    right
+}
 
 // poseidon hash of hex("message_input_extend") reduced mod KB_PRIME
 fn digest_expand_domain_sep() -> Digest {
@@ -50,8 +59,8 @@ impl SphincsSecretKey {
     }
 
     pub fn sign(&self, message: &[F; MESSAGE_LEN_FE]) -> Result<SphincsSig, Box<dyn std::error::Error>> {
-        // Hash the message to a digest so that we can extract the tree and leaf indices for the FORS signature.
-        let message_digest = poseidon16_compress_pair(message, &[F::ZERO; 8]);
+        let r: [F; MSG_RANDOMNESS_LEN_FE] = random();
+        let message_digest = poseidon16_compress_pair(message, &make_digest_right(&r));
 
         let (leaf_idx, tree_address, fors_indices) = extract_digest_hash(&message_digest);
 
@@ -63,6 +72,7 @@ impl SphincsSecretKey {
             hypertree::hypertree_sign(&self.into(), &fors_pk.0, leaf_idx, tree_address);
 
         Ok(SphincsSig {
+            randomness: r,
             fors_sig,
             hypertree_sig,
         })
@@ -88,6 +98,7 @@ pub struct SphincsPublicKey {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SphincsSig {
+    pub randomness: [F; MSG_RANDOMNESS_LEN_FE],
     pub fors_sig: ForsSignature,
     pub hypertree_sig: HypertreeSignature,
 }
@@ -175,7 +186,7 @@ pub fn extract_digest_parts(
 
 impl SphincsPublicKey {
     pub fn verify(&self, message: &[F; MESSAGE_LEN_FE], sig: &SphincsSig) -> bool {
-        let message_digest = poseidon16_compress_pair(message, &[F::ZERO; 8]);
+        let message_digest = poseidon16_compress_pair(message, &make_digest_right(&sig.randomness));
 
         let (leaf_idx, tree_address, fors_indices) = extract_digest_hash(&message_digest);
 

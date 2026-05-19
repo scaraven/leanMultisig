@@ -97,8 +97,15 @@ def sphincs_verify(pk, message):
     # Postcondition:
     #   Asserts the signature is valid for (pk, message).
     #   Fails the circuit if any sub-verification does not hold.
+    randomness_arr = Array(MSG_RANDOMNESS_LEN_FE)
+    hint_witness("randomness", randomness_arr)
+    right_half = Array(DIGEST_LEN)
+    for k in unroll(0, MSG_RANDOMNESS_LEN_FE):
+        right_half[k] = randomness_arr[k]
+    set_to_4_zeros(right_half + MSG_RANDOMNESS_LEN_FE)
+
     message_digest = Array(DIGEST_LEN)
-    poseidon16_compress(message, ZERO_VEC_PTR, message_digest)
+    poseidon16_compress(message, right_half, message_digest)
 
     indices = decompose_message_digest(message_digest)
     

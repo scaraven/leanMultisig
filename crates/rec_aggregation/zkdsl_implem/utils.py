@@ -362,6 +362,14 @@ def copy_5(a, b):
 
 
 @inline
+def set_to_4_zeros(a):
+    a[0] = 0
+    a[1] = 0
+    a[2] = 0
+    a[3] = 0
+    return
+
+@inline
 def set_to_5_zeros(a):
     zero_ptr = ZERO_VEC_PTR
     dot_product_ee(a, ONE_EF_PTR, zero_ptr)
