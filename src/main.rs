@@ -20,6 +20,8 @@ enum Cli {
             help = "Print BenchmarkReport as JSON on stdout (one line per run); suppresses live output"
         )]
         json: bool,
+        #[arg(long, default_value = "1", help = "Number of measured runs per node (after warmup)")]
+        repeat: usize,
     },
     #[command(about = "Run n->1 recursion")]
     Recursion {
@@ -34,6 +36,8 @@ enum Cli {
             help = "Print BenchmarkReport as JSON on stdout (one line per run); suppresses live output"
         )]
         json: bool,
+        #[arg(long, default_value = "1", help = "Number of measured runs per node (after warmup)")]
+        repeat: usize,
     },
     #[command(about = "Aggregate SPHINCS+ signatures")]
     Sphincs {
@@ -51,18 +55,20 @@ enum Cli {
             help = "Print BenchmarkReport as JSON on stdout (one line per run); suppresses live output"
         )]
         json: bool,
+        #[arg(long, default_value = "1", help = "Number of measured runs per node (after warmup)")]
+        repeat: usize,
     },
 }
 
-fn run_with_warmup(topology: &AggregationTopology, tracing: bool, json: bool) {
+fn run_with_warmup(topology: &AggregationTopology, tracing: bool, json: bool, repeat: usize) {
     let warmup = biggest_leaf(topology).unwrap();
     eprint!("warming up... ");
-    let _ = run_aggregation_benchmark(&warmup, false, true);
+    let _ = run_aggregation_benchmark(&warmup, false, true, 1);
     eprintln!(
         "used {:.2} GiB",
         system_info::peak_rss_bytes() as f64 / (1u64 << 30) as f64
     );
-    let report = run_aggregation_benchmark(topology, tracing && !json, json);
+    let report = run_aggregation_benchmark(topology, tracing && !json, json, repeat);
     if json {
         println!("{}", serde_json::to_string(&report).unwrap());
     }
@@ -81,6 +87,7 @@ fn main() {
             log_inv_rate,
             tracing,
             json,
+            repeat,
         } => {
             let topology = AggregationTopology {
                 raw_xmss: n_signatures,
@@ -88,13 +95,14 @@ fn main() {
                 log_inv_rate,
                 overlap: 0,
             };
-            run_with_warmup(&topology, tracing, json);
+            run_with_warmup(&topology, tracing, json, repeat);
         }
         Cli::Recursion {
             n,
             log_inv_rate,
             tracing,
             json,
+            repeat,
         } => {
             let topology = AggregationTopology {
                 raw_xmss: 0,
@@ -110,7 +118,7 @@ fn main() {
                 log_inv_rate,
                 overlap: 0,
             };
-            run_with_warmup(&topology, tracing, json);
+            run_with_warmup(&topology, tracing, json, repeat);
         }
         Cli::Sphincs {
             n_signatures,
@@ -119,7 +127,7 @@ fn main() {
         } => {
             run_sphincs_benchmark(n_signatures, log_inv_rate, tracing);
         }
-        Cli::FancyAggregation { json } => {
+        Cli::FancyAggregation { json, repeat } => {
             let topology = AggregationTopology {
                 raw_xmss: 0,
                 children: vec![AggregationTopology {
@@ -191,7 +199,7 @@ fn main() {
                 log_inv_rate: 4,
                 overlap: 0,
             };
-            run_with_warmup(&topology, false, json);
+            run_with_warmup(&topology, false, json, repeat);
         }
     }
 }
