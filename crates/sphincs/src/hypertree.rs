@@ -2,7 +2,7 @@ use backend::{IntoParallelIterator, ParallelIterator, ParallelSlice, PrimeCharac
 use serde::{Deserialize, Serialize};
 use utils::poseidon16_compress_pair;
 
-use crate::*;
+use crate::{wots::{half_to_full, truncate_half}, *};
 
 // SPHINCS+ Hypertree
 //
@@ -39,7 +39,7 @@ impl HypertreeSecretKey {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct HypertreePublicKey(pub Digest);
+pub struct HypertreePublicKey(pub HalfDigest);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HypertreeSignature {
@@ -65,7 +65,7 @@ pub struct HypertreeLayerSig {
     pub wots_sig: WotsSignature,
     /// Sibling digests from the leaf level up to (but not including) the root.
     /// Length = SPX_TREE_HEIGHT = 11.
-    pub auth_path: Vec<Digest>,
+    pub auth_path: Vec<HalfDigest>,
 }
 
 // ---------------------------------------------------------------------------
@@ -117,11 +117,11 @@ fn derive_wots_preimages(seed: &[u8; 20], layer: usize, leaf_index: usize) -> [D
 /// `tree_address` is the index of this subtree within the layer (used only for pre-image
 /// derivation — the leaf index passed to derive_wots_preimages is
 /// tree_address * num_leaves + local_leaf_index so keys are globally unique).
-fn build_layer_tree(seed: &[u8; 20], layer: usize, tree_address: usize) -> (Digest, Vec<Vec<Digest>>) {
+fn build_layer_tree(seed: &[u8; 20], layer: usize, tree_address: usize) -> (HalfDigest, Vec<Vec<HalfDigest>>) {
     let num_leaves = 1usize << SPX_TREE_HEIGHT;
     let global_base = tree_address * num_leaves;
 
-    let leaf_nodes: Vec<Digest> = (0..num_leaves)
+    let leaf_nodes: Vec<HalfDigest> = (0..num_leaves)
         .into_par_iter()
         .map(|local| {
             let preimages = derive_wots_preimages(seed, layer, global_base + local);
@@ -132,9 +132,9 @@ fn build_layer_tree(seed: &[u8; 20], layer: usize, tree_address: usize) -> (Dige
     let mut levels = vec![leaf_nodes];
     for _ in 0..SPX_TREE_HEIGHT {
         let prev = levels.last().unwrap();
-        let next: Vec<Digest> = prev
+        let next: Vec<HalfDigest> = prev
             .par_chunks_exact(2)
-            .map(|pair| poseidon16_compress_pair(&pair[0], &pair[1]))
+            .map(|pair| truncate_half(poseidon16_compress_pair(&half_to_full(pair[0]), &half_to_full(pair[1]))))
             .collect();
         levels.push(next);
     }
@@ -145,7 +145,7 @@ fn build_layer_tree(seed: &[u8; 20], layer: usize, tree_address: usize) -> (Dige
 
 /// Extract the auth path for `leaf_index` from a materialised tree.
 /// Returns SPX_TREE_HEIGHT sibling digests, from leaf level up to (not including) root.
-fn extract_auth_path(levels: &[Vec<Digest>], leaf_index: usize) -> Vec<Digest> {
+fn extract_auth_path(levels: &[Vec<HalfDigest>], leaf_index: usize) -> Vec<HalfDigest> {
     (0..SPX_TREE_HEIGHT)
         .map(|level| {
             let sibling_idx = (leaf_index >> level) ^ 1;
@@ -226,7 +226,7 @@ pub fn hypertree_sign(
 
         // Prepare message for the next layer (not needed after the top layer).
         if layer < SPX_D - 1 {
-            let next_msg = hash_inter_layer_message(&root, layer + 1);
+            let next_msg = hash_inter_layer_message(&half_to_full(root), layer + 1);
             current_message = next_msg;
         }
 
@@ -250,7 +250,7 @@ pub fn hypertree_verify(
     message: &Digest,
     leaf_index: usize,
     tree_address: usize,
-    expected_pk: &Digest,
+    expected_pk: &HalfDigest,
 ) -> bool {
     let mut current_message = hash_inter_layer_message(message, 0);
 
@@ -262,8 +262,8 @@ pub fn hypertree_verify(
             None => return false, // Invalid WOTS signature
         };
 
-        // Hash the recovered public key to get the leaf node.
-        let mut current = wots_pk.hash();
+        // Hash the recovered public key to get the leaf node (4 FEs).
+        let mut current: HalfDigest = wots_pk.hash();
 
         // Fail if auth_path is not the correct length
         if layer_sig.auth_path.len() != SPX_TREE_HEIGHT {
@@ -274,9 +274,9 @@ pub fn hypertree_verify(
         for (level, sibling) in layer_sig.auth_path.iter().enumerate() {
             let is_left = ((layer_leaf_index >> level) & 1) == 0;
             current = if is_left {
-                poseidon16_compress_pair(&current, sibling)
+                truncate_half(poseidon16_compress_pair(&half_to_full(current), &half_to_full(*sibling)))
             } else {
-                poseidon16_compress_pair(sibling, &current)
+                truncate_half(poseidon16_compress_pair(&half_to_full(*sibling), &half_to_full(current)))
             };
         }
 
@@ -285,7 +285,7 @@ pub fn hypertree_verify(
 
         // Derive the next layer's message from this root.
         if layer < SPX_D - 1 {
-            let next_msg = hash_inter_layer_message(&layer_root, layer + 1);
+            let next_msg = hash_inter_layer_message(&half_to_full(layer_root), layer + 1);
             current_message = next_msg;
         } else {
             // Top layer: the recovered root is the public key.

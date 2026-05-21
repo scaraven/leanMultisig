@@ -19,7 +19,7 @@ pub struct WotsSecretKey {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct WotsPublicKey(pub [Digest; V]);
+pub struct WotsPublicKey(pub [HalfDigest; V]);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct WotsSignature {
@@ -27,7 +27,7 @@ pub struct WotsSignature {
         with = "backend::array_serialization",
         bound(serialize = "F: Serialize", deserialize = "F: Deserialize<'de>")
     )]
-    pub chain_tips: [Digest; V],
+    pub chain_tips: [HalfDigest; V],
     pub randomness: [F; RANDOMNESS_LEN_FE],
 }
 
@@ -39,7 +39,10 @@ impl WotsSecretKey {
     pub fn new(pre_images: [Digest; V]) -> Self {
         Self {
             pre_images,
-            public_key: WotsPublicKey(std::array::from_fn(|i| iterate_hash(pre_images[i], CHAIN_LENGTH - 1))),
+            // Public key = level CHAIN_LENGTH: apply CHAIN_LENGTH total steps from pre_image.
+            // iterate_hash_half always starts with 1 hash of the full pre_image (level-0),
+            // then n more half_to_full hashes; so CHAIN_LENGTH total steps = CHAIN_LENGTH - 1 extra.
+            public_key: WotsPublicKey(std::array::from_fn(|i| iterate_hash_half(pre_images[i], CHAIN_LENGTH - 1))),
         }
     }
 
@@ -58,7 +61,7 @@ impl WotsSecretKey {
     ) -> WotsSignature {
         let encoding = wots_encode(message, layer_index, &randomness).unwrap();
         WotsSignature {
-            chain_tips: std::array::from_fn(|i| iterate_hash(self.pre_images[i], encoding[i] as usize)),
+            chain_tips: std::array::from_fn(|i| iterate_hash_half(self.pre_images[i], encoding[i] as usize)),
             randomness,
         }
     }
@@ -68,23 +71,57 @@ impl WotsSignature {
     pub fn recover_public_key(&self, message: &Digest, layer_index: u32) -> Option<WotsPublicKey> {
         let encoding = wots_encode(message, layer_index, &self.randomness)?;
         Some(WotsPublicKey(std::array::from_fn(|i| {
-            iterate_hash(self.chain_tips[i], CHAIN_LENGTH - 1 - encoding[i] as usize)
+            iterate_hash_half_from_half(self.chain_tips[i], CHAIN_LENGTH - 1 - encoding[i] as usize)
         })))
     }
 }
 
 impl WotsPublicKey {
-    pub fn hash(&self) -> Digest {
-        let init = poseidon16_compress_pair(&self.0[0], &self.0[1]);
-        self.0[2..]
-            .iter()
-            .fold(init, |acc, chunk| poseidon16_compress_pair(&acc, chunk))
+    pub fn hash(&self) -> HalfDigest {
+        let init = truncate_half(poseidon16_compress_pair(&half_to_full(self.0[0]), &half_to_full(self.0[1])));
+        self.0[2..].iter().fold(init, |acc, &chunk| {
+            truncate_half(poseidon16_compress_pair(&half_to_full(acc), &half_to_full(chunk)))
+        })
     }
 }
 
-/// Hash a digest n times: iterate_hash(x, 0) = x, iterate_hash(x, n) = hash^n(x).
-pub fn iterate_hash(a: Digest, n: usize) -> Digest {
-    (0..n).fold(a, |acc, _| poseidon16_compress_pair(&acc, &Default::default()))
+/// Advance the chain from a full pre-image `a` by `n` steps under the upper-half convention.
+///
+/// Step 0 → level-0: always hash the pre-image once: left = pre_image (8 FEs), right = zeros.
+///                    level-0 = upper 4 FEs of poseidon(pre_image, 0).
+/// Step k → level-k: left = [0,0,0,0 | level-(k-1)], right = zeros.
+///
+/// Applying `n` steps returns level-n.  The full chain has CHAIN_LENGTH steps:
+///   public key = iterate_hash_half(pre_image, CHAIN_LENGTH), all using the convention above.
+///   signature tip for encoding e = iterate_hash_half(pre_image, e).
+pub fn iterate_hash_half(a: Digest, n: usize) -> HalfDigest {
+    // Level-0: hash the full pre-image once.
+    let level0 = truncate_half(poseidon16_compress_pair(&a, &Default::default()));
+    // Further levels use the upper-half convention.
+    (0..n).fold(level0, |acc, _| {
+        truncate_half(poseidon16_compress_pair(&half_to_full(acc), &Default::default()))
+    })
+}
+
+/// Continue hashing from a 4-FE half-digest (already at some chain level) n more steps.
+pub fn iterate_hash_half_from_half(a: HalfDigest, n: usize) -> HalfDigest {
+    (0..n).fold(a, |acc, _| {
+        truncate_half(poseidon16_compress_pair(&half_to_full(acc), &Default::default()))
+    })
+}
+
+/// Extract the lower 4 FEs (slots 0–3) of a Digest as a HalfDigest.
+#[inline]
+pub fn truncate_half(d: Digest) -> HalfDigest {
+    d[..HALF_DIGEST_SIZE].try_into().unwrap()
+}
+
+/// Place a 4-FE HalfDigest into the lower half of a full Digest: [h | 0,0,0,0].
+#[inline]
+pub fn half_to_full(h: HalfDigest) -> Digest {
+    let mut d = Digest::default();
+    d[..HALF_DIGEST_SIZE].copy_from_slice(&h);
+    d
 }
 
 pub fn find_randomness_for_wots_encoding(

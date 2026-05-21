@@ -14,9 +14,11 @@ use backend::KoalaBear;
 
 // --- Field / digest types ---
 pub(crate) const DIGEST_SIZE: usize = 8;
+pub const HALF_DIGEST_SIZE: usize = 4;
 
 pub(crate) type F = KoalaBear;
 pub(crate) type Digest = [F; DIGEST_SIZE];
+pub type HalfDigest = [KoalaBear; HALF_DIGEST_SIZE];
 
 // --- SPHINCS+ structural parameters ---
 pub const SPX_N: usize = 16;

@@ -6,8 +6,9 @@ use utils::poseidon16_compress_pair;
 use crate::fors::ForsSignature;
 use crate::hypertree::HypertreeSignature;
 use crate::{
-    DIGEST_SIZE, Digest, F, ForsPublicKey, ForsSecretKey, HypertreeSecretKey, MESSAGE_LEN_FE, MSG_RANDOMNESS_LEN_FE,
-    SPX_FORS_HEIGHT, SPX_FORS_TREES, SPX_TREE_HEIGHT, fors, hypertree,
+    DIGEST_SIZE, Digest, F, ForsPublicKey, ForsSecretKey, HalfDigest, HypertreeSecretKey,
+    MESSAGE_LEN_FE, MSG_RANDOMNESS_LEN_FE, SPX_FORS_HEIGHT, SPX_FORS_TREES, SPX_TREE_HEIGHT, fors, hypertree,
+    wots::half_to_full,
 };
 
 /// Build the 8-FE right-half for the message digest Poseidon call from `r`.
@@ -69,7 +70,7 @@ impl SphincsSecretKey {
         let fors_pk = self.fors_pk();
 
         let hypertree_sig: HypertreeSignature =
-            hypertree::hypertree_sign(&self.into(), &fors_pk.0, leaf_idx, tree_address);
+            hypertree::hypertree_sign(&self.into(), &half_to_full(fors_pk.0), leaf_idx, tree_address);
 
         Ok(SphincsSig {
             randomness: r,
@@ -93,7 +94,7 @@ impl From<&SphincsSecretKey> for HypertreeSecretKey {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SphincsPublicKey {
-    root: Digest,
+    root: HalfDigest,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -195,10 +196,10 @@ impl SphincsPublicKey {
             Err(_) => return false,
         };
 
-        hypertree::hypertree_verify(&sig.hypertree_sig, &fors_pk.0, leaf_idx, tree_address, &self.root)
+        hypertree::hypertree_verify(&sig.hypertree_sig, &half_to_full(fors_pk.0), leaf_idx, tree_address, &self.root)
     }
 
-    pub fn root(&self) -> Digest {
+    pub fn root(&self) -> HalfDigest {
         self.root
     }
 }

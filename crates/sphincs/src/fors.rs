@@ -2,7 +2,7 @@ use backend::{IntoParallelIterator, ParallelIterator, ParallelSlice};
 use serde::{Deserialize, Serialize};
 use utils::poseidon16_compress_pair;
 
-use crate::*;
+use crate::{wots::{half_to_full, truncate_half}, *};
 
 // FORS (Few-Times Signature Scheme)
 //
@@ -21,13 +21,13 @@ pub struct ForsSecretKey {
     seed: [u8; 20],
     /// Materialised tree nodes: [tree][level][node]
     /// level 0 = leaf hashes, level SPX_FORS_HEIGHT = root
-    nodes: Vec<Vec<Vec<Digest>>>,
+    nodes: Vec<Vec<Vec<HalfDigest>>>,
     // Cached material
-    root: Digest,
+    root: HalfDigest,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ForsPublicKey(pub Digest);
+pub struct ForsPublicKey(pub HalfDigest);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ForsSignature {
@@ -37,10 +37,10 @@ pub struct ForsSignature {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ForsTreeSig {
-    pub leaf_secret: Digest,
+    pub leaf_secret: HalfDigest,
     /// Sibling digests from leaf level up to (but not including) the root.
     /// Length = SPX_FORS_HEIGHT = 15.
-    pub auth_path: Vec<Digest>,
+    pub auth_path: Vec<HalfDigest>,
 }
 
 /// Derive the secret value for a single FORS leaf via a Poseidon hash.
@@ -53,7 +53,7 @@ pub struct ForsTreeSig {
 ///
 /// The input is hashed against an all-zero digest so the full 16-element
 /// Poseidon state is used, matching the rest of the tree construction.
-fn derive_leaf_secret(seed: &[u8; 20], tree_index: usize, leaf_index: usize) -> Digest {
+fn derive_leaf_secret(seed: &[u8; 20], tree_index: usize, leaf_index: usize) -> HalfDigest {
     let mut input = Digest::default();
     for (i, chunk) in seed.chunks_exact(4).enumerate() {
         input[i] = F::new(u32::from_le_bytes(chunk.try_into().unwrap()));
@@ -61,12 +61,12 @@ fn derive_leaf_secret(seed: &[u8; 20], tree_index: usize, leaf_index: usize) -> 
     input[5] = F::new(0x02);
     input[6] = F::new(tree_index as u32);
     input[7] = F::new(leaf_index as u32);
-    poseidon16_compress_pair(&input, &Digest::default())
+    truncate_half(poseidon16_compress_pair(&input, &Digest::default()))
 }
 
 /// Hash a leaf secret to produce the level-0 tree node.
-fn hash_leaf(secret: &Digest) -> Digest {
-    poseidon16_compress_pair(secret, &Default::default())
+fn hash_leaf(secret: &HalfDigest) -> HalfDigest {
+    truncate_half(poseidon16_compress_pair(&half_to_full(*secret), &Default::default()))
 }
 
 /// Generate the full FORS keypair, materialising all leaf secrets and tree nodes.
@@ -77,7 +77,7 @@ pub fn fors_key_gen(seed: [u8; 20]) -> (ForsSecretKey, ForsPublicKey) {
         .into_par_iter()
         .map(|t| {
             // Level 0: hash of each secret value.
-            let leaf_hashes: Vec<Digest> = (0..num_leaves)
+            let leaf_hashes: Vec<HalfDigest> = (0..num_leaves)
                 .into_par_iter()
                 .map(|l| derive_leaf_secret(&seed, t, l))
                 .collect();
@@ -86,9 +86,9 @@ pub fn fors_key_gen(seed: [u8; 20]) -> (ForsSecretKey, ForsPublicKey) {
             let mut levels = vec![leaf_hashes];
             for _ in 0..SPX_FORS_HEIGHT {
                 let prev = levels.last().unwrap();
-                let next: Vec<Digest> = prev
+                let next: Vec<HalfDigest> = prev
                     .par_chunks_exact(2)
-                    .map(|pair| poseidon16_compress_pair(&pair[0], &pair[1]))
+                    .map(|pair| truncate_half(poseidon16_compress_pair(&half_to_full(pair[0]), &half_to_full(pair[1]))))
                     .collect();
                 levels.push(next);
             }
@@ -105,17 +105,19 @@ pub fn fors_key_gen(seed: [u8; 20]) -> (ForsSecretKey, ForsPublicKey) {
     (sk, pk)
 }
 
-fn fors_public_key_from_nodes(nodes: &[Vec<Vec<Digest>>]) -> ForsPublicKey {
-    let roots: Vec<Digest> = nodes.iter().map(|levels| levels[SPX_FORS_HEIGHT][0]).collect();
+fn fors_public_key_from_nodes(nodes: &[Vec<Vec<HalfDigest>>]) -> ForsPublicKey {
+    let roots: Vec<HalfDigest> = nodes.iter().map(|levels| levels[SPX_FORS_HEIGHT][0]).collect();
     ForsPublicKey(fold_roots(&roots))
 }
 
-/// Sequential left-fold of k roots into a single digest.
+/// Sequential left-fold of k roots into a single half-digest.
 /// fold([r0, r1, r2, ...]) = hash(hash(r0, r1), r2) ...
-pub fn fold_roots(roots: &[Digest]) -> Digest {
+pub fn fold_roots(roots: &[HalfDigest]) -> HalfDigest {
     assert!(roots.len() >= 2, "fold_roots requires at least 2 roots");
-    let init = poseidon16_compress_pair(&roots[0], &roots[1]);
-    roots[2..].iter().fold(init, |acc, r| poseidon16_compress_pair(&acc, r))
+    let init = truncate_half(poseidon16_compress_pair(&half_to_full(roots[0]), &half_to_full(roots[1])));
+    roots[2..].iter().fold(init, |acc, r| {
+        truncate_half(poseidon16_compress_pair(&half_to_full(acc), &half_to_full(*r)))
+    })
 }
 
 /// Sign a single tree in the FORS forest, revealing the leaf secret and auth path for the selected leaf.
@@ -123,9 +125,9 @@ pub fn fors_sign_single_tree(sk: &ForsSecretKey, tree_index: usize, leaf_index: 
     assert!(tree_index < SPX_FORS_TREES, "Tree index out of bounds");
     assert!(leaf_index < (1 << SPX_FORS_HEIGHT), "Leaf index out of bounds");
 
-    let leaf_secret = sk.nodes[tree_index][0][leaf_index];
+    let leaf_secret: HalfDigest = sk.nodes[tree_index][0][leaf_index];
 
-    let auth_path = (0..SPX_FORS_HEIGHT)
+    let auth_path: Vec<HalfDigest> = (0..SPX_FORS_HEIGHT)
         .map(|level| {
             let sibling_idx = (leaf_index >> level) ^ 1;
             sk.nodes[tree_index][level][sibling_idx]
@@ -149,7 +151,7 @@ pub enum ForsVerifyError {
 
 /// Verify a FORS signature and recover the FORS public key.
 pub fn fors_verify(sig: &ForsSignature, indices: &[usize; SPX_FORS_TREES]) -> Result<ForsPublicKey, ForsVerifyError> {
-    let mut roots = [Digest::default(); SPX_FORS_TREES];
+    let mut roots = [HalfDigest::default(); SPX_FORS_TREES];
     for (t, (tree_sig, &leaf_idx)) in sig.trees.iter().zip(indices.iter()).enumerate() {
         if tree_sig.auth_path.len() != SPX_FORS_HEIGHT {
             return Err(ForsVerifyError::WrongAuthPathLength);
@@ -159,16 +161,15 @@ pub fn fors_verify(sig: &ForsSignature, indices: &[usize; SPX_FORS_TREES]) -> Re
             return Err(ForsVerifyError::OutofBoundsLeafIndex);
         }
 
-        // Create a mutable copy
         let mut current = tree_sig.leaf_secret;
 
         // Walk up the tree using the auth path.
         for (level, sibling) in tree_sig.auth_path.iter().enumerate() {
             let is_left = ((leaf_idx >> level) & 1) == 0;
             current = if is_left {
-                poseidon16_compress_pair(&current, sibling)
+                truncate_half(poseidon16_compress_pair(&half_to_full(current), &half_to_full(*sibling)))
             } else {
-                poseidon16_compress_pair(sibling, &current)
+                truncate_half(poseidon16_compress_pair(&half_to_full(*sibling), &half_to_full(current)))
             };
         }
 
@@ -183,20 +184,20 @@ impl ForsSecretKey {
         ForsPublicKey(self.root)
     }
 
-    pub fn tree_pubkey(&self, tree_index: usize) -> Digest {
+    pub fn tree_pubkey(&self, tree_index: usize) -> HalfDigest {
         self.nodes[tree_index][SPX_FORS_HEIGHT][0]
     }
 }
 
 /// Size of a flat FORS signature in field elements.
-/// Layout: for each of SPX_FORS_TREES trees: [leaf_secret (DIGEST_SIZE FEs) | auth_path (SPX_FORS_HEIGHT * DIGEST_SIZE FEs)]
-pub const FORS_SIG_SIZE_FE: usize = SPX_FORS_TREES * (1 + SPX_FORS_HEIGHT) * DIGEST_SIZE;
+/// Layout: for each of SPX_FORS_TREES trees: [leaf_secret (HALF_DIGEST_SIZE FEs) | auth_path (SPX_FORS_HEIGHT * HALF_DIGEST_SIZE FEs)]
+pub const FORS_SIG_SIZE_FE: usize = SPX_FORS_TREES * (1 + SPX_FORS_HEIGHT) * HALF_DIGEST_SIZE;
 
 /// Flatten a `ForsSignature` into a `Vec<F>` matching the zkDSL hint layout.
 ///
 /// Layout (per tree t):
-///   offset t*(1+SPX_FORS_HEIGHT)*DIGEST_SIZE       : leaf_secret  (DIGEST_SIZE FEs)
-///   offset t*(1+SPX_FORS_HEIGHT)*DIGEST_SIZE + DIGEST_SIZE : auth_path[0..SPX_FORS_HEIGHT] (each DIGEST_SIZE FEs)
+///   offset t*(1+SPX_FORS_HEIGHT)*HALF_DIGEST_SIZE       : leaf_secret  (HALF_DIGEST_SIZE FEs)
+///   offset t*(1+SPX_FORS_HEIGHT)*HALF_DIGEST_SIZE + HALF_DIGEST_SIZE : auth_path[0..SPX_FORS_HEIGHT] (each HALF_DIGEST_SIZE FEs)
 pub fn fors_sig_to_flat(sig: &ForsSignature) -> Vec<F> {
     let mut out = Vec::with_capacity(FORS_SIG_SIZE_FE);
     for tree in &sig.trees {
@@ -216,14 +217,14 @@ pub fn fors_sig_from_flat(flat: &[F]) -> Option<ForsSignature> {
     if flat.len() != FORS_SIG_SIZE_FE {
         return None;
     }
-    let stride = (1 + SPX_FORS_HEIGHT) * DIGEST_SIZE;
+    let stride = (1 + SPX_FORS_HEIGHT) * HALF_DIGEST_SIZE;
     let trees = std::array::from_fn(|t| {
         let base = t * stride;
-        let leaf_secret: Digest = flat[base..base + DIGEST_SIZE].try_into().unwrap();
+        let leaf_secret: HalfDigest = flat[base..base + HALF_DIGEST_SIZE].try_into().unwrap();
         let auth_path = (0..SPX_FORS_HEIGHT)
             .map(|i| {
-                let off = base + DIGEST_SIZE + i * DIGEST_SIZE;
-                flat[off..off + DIGEST_SIZE].try_into().unwrap()
+                let off = base + HALF_DIGEST_SIZE + i * HALF_DIGEST_SIZE;
+                flat[off..off + HALF_DIGEST_SIZE].try_into().unwrap()
             })
             .collect();
         ForsTreeSig { leaf_secret, auth_path }
@@ -301,18 +302,18 @@ mod tests {
         };
         let flat = fors_sig_to_flat(&sig);
         assert_eq!(flat.len(), FORS_SIG_SIZE_FE);
-        assert_eq!(FORS_SIG_SIZE_FE, 1152);
+        assert_eq!(FORS_SIG_SIZE_FE, 576);
     }
 
     #[test]
     fn test_flat_layout_positions() {
         // Build a signature where each tree uses recognisable values so we can
         // assert exact offsets in the flat vector.
-        let stride = (1 + SPX_FORS_HEIGHT) * DIGEST_SIZE;
-        let trees_data: Vec<(Digest, Vec<Digest>)> = (0..SPX_FORS_TREES)
+        let stride = (1 + SPX_FORS_HEIGHT) * HALF_DIGEST_SIZE;
+        let trees_data: Vec<(HalfDigest, Vec<HalfDigest>)> = (0..SPX_FORS_TREES)
             .map(|t| {
-                let leaf: Digest = std::array::from_fn(|i| F::from_usize(t * 100 + i));
-                let auth: Vec<Digest> = (0..SPX_FORS_HEIGHT)
+                let leaf: HalfDigest = std::array::from_fn(|i| F::from_usize(t * 100 + i));
+                let auth: Vec<HalfDigest> = (0..SPX_FORS_HEIGHT)
                     .map(|level| std::array::from_fn(|i| F::from_usize(t * 1000 + level * 10 + i)))
                     .collect();
                 (leaf, auth)
@@ -330,17 +331,17 @@ mod tests {
 
         for t in 0..SPX_FORS_TREES {
             let base = t * stride;
-            // leaf_secret occupies [base, base + DIGEST_SIZE)
+            // leaf_secret occupies [base, base + HALF_DIGEST_SIZE)
             assert_eq!(
-                &flat[base..base + DIGEST_SIZE],
+                &flat[base..base + HALF_DIGEST_SIZE],
                 &trees_data[t].0,
                 "tree {t} leaf_secret mismatch"
             );
-            // each auth_path node at base + DIGEST_SIZE + level * DIGEST_SIZE
+            // each auth_path node at base + HALF_DIGEST_SIZE + level * HALF_DIGEST_SIZE
             for level in 0..SPX_FORS_HEIGHT {
-                let off = base + DIGEST_SIZE + level * DIGEST_SIZE;
+                let off = base + HALF_DIGEST_SIZE + level * HALF_DIGEST_SIZE;
                 assert_eq!(
-                    &flat[off..off + DIGEST_SIZE],
+                    &flat[off..off + HALF_DIGEST_SIZE],
                     &trees_data[t].1[level],
                     "tree {t} auth_path[{level}] mismatch"
                 );
