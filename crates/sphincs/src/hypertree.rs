@@ -125,7 +125,10 @@ fn build_layer_tree(seed: &[u8; 20], layer: usize, tree_address: usize) -> (Half
         .into_par_iter()
         .map(|local| {
             let preimages = derive_wots_preimages(seed, layer, global_base + local);
-            WotsSecretKey::new(preimages).public_key().hash()
+            // Temporary shim: truncate full Digests to HalfDigest until derive_wots_preimages
+            // is replaced with PRF calls returning HalfDigest directly.
+            let half_preimages: [HalfDigest; SPX_WOTS_LEN] = std::array::from_fn(|i| truncate_half(preimages[i]));
+            WotsSecretKey::new(half_preimages).public_key().hash()
         })
         .collect();
 
@@ -217,10 +220,14 @@ pub fn hypertree_sign(
         let (root, levels) = build_layer_tree(&sk.seed, layer, layer_tree_address);
 
         let preimages = derive_wots_preimages(&sk.seed, layer, global_leaf);
-        let wots_sk = WotsSecretKey::new(preimages);
+        // Temporary shim: truncate until derive_wots_preimages is replaced with PRF calls.
+        let half_preimages: [HalfDigest; SPX_WOTS_LEN] = std::array::from_fn(|i| truncate_half(preimages[i]));
+        let wots_sk = WotsSecretKey::new(half_preimages);
 
-        let (randomness, _, _) = find_randomness_for_wots_encoding(&current_message, layer as u32, &mut rng);
-        let wots_sig = wots_sk.sign_with_randomness(&current_message, layer as u32, randomness);
+        // Temporary shim: pass zero ADRS until hypertree is updated to use Adrs constructors.
+        let (adrs0, adrs1) = (F::default(), F::default());
+        let (randomness, _, _) = find_randomness_for_wots_encoding(&current_message, adrs0, adrs1, &mut rng);
+        let wots_sig = wots_sk.sign_with_randomness(&current_message, adrs0, adrs1, randomness);
 
         let auth_path = extract_auth_path(&levels, layer_leaf_index);
 
@@ -257,7 +264,8 @@ pub fn hypertree_verify(
     for (layer, layer_sig) in sig.layers.iter().enumerate() {
         let (_, layer_leaf_index, _) = calculate_address_info(leaf_index, tree_address, layer);
 
-        let wots_pk = match layer_sig.wots_sig.recover_public_key(&current_message, layer as u32) {
+        // Temporary shim: pass zero ADRS until hypertree is updated to use Adrs constructors.
+        let wots_pk = match layer_sig.wots_sig.recover_public_key(&current_message, F::default(), F::default()) {
             Some(pk) => pk,
             None => return false, // Invalid WOTS signature
         };

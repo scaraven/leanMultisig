@@ -5,7 +5,7 @@ use utils::{ToUsize, poseidon16_compress_pair};
 
 use crate::*;
 
-// SPHINCS+ WOTS+: V=32, w=16, TARGET_SUM=240, V_GRINDING=0.
+// SPHINCS+ WOTS+: V=32, w=16, TARGET_SUM=304, V_GRINDING=0.
 // Self-contained — does not share code with the xmss crate.
 
 const V: usize = SPX_WOTS_LEN; // 32
@@ -14,7 +14,7 @@ const CHAIN_LENGTH: usize = SPX_WOTS_W; // 16
 
 #[derive(Debug)]
 pub struct WotsSecretKey {
-    pub pre_images: [Digest; V],
+    pub pre_images: [HalfDigest; V],
     public_key: WotsPublicKey,
 }
 
@@ -36,13 +36,12 @@ impl WotsSecretKey {
         Self::new(rng.random())
     }
 
-    pub fn new(pre_images: [Digest; V]) -> Self {
+    pub fn new(pre_images: [HalfDigest; V]) -> Self {
         Self {
             pre_images,
-            // Public key convention:
-            // level-0 is poseidon(pre_image, 0) truncated to 4 FEs, then we apply
-            // CHAIN_LENGTH - 1 further half-digest steps to reach the terminal chain tip.
-            public_key: WotsPublicKey(std::array::from_fn(|i| iterate_hash_half(pre_images[i], CHAIN_LENGTH - 1))),
+            public_key: WotsPublicKey(std::array::from_fn(|i| {
+                iterate_hash_half_from_half(pre_images[i], CHAIN_LENGTH - 1)
+            })),
         }
     }
 
@@ -50,26 +49,29 @@ impl WotsSecretKey {
         &self.public_key
     }
 
-    /// Sign a message with the WOTS+ secret key, using the provided randomness for encoding.
+    /// Sign a message with the WOTS+ secret key, using the provided randomness and ADRS.
     /// Precondition: the encoding must be valid (sum of indices == TARGET_SUM).
     /// Note: `message` must be a Digest (8 FEs). Hash external messages before calling.
     pub fn sign_with_randomness(
         &self,
         message: &Digest,
-        layer_index: u32,
+        adrs0: F,
+        adrs1: F,
         randomness: [F; RANDOMNESS_LEN_FE],
     ) -> WotsSignature {
-        let encoding = wots_encode(message, layer_index, &randomness).unwrap();
+        let encoding = wots_encode(message, adrs0, adrs1, &randomness).unwrap();
         WotsSignature {
-            chain_tips: std::array::from_fn(|i| iterate_hash_half(self.pre_images[i], encoding[i] as usize)),
+            chain_tips: std::array::from_fn(|i| {
+                iterate_hash_half_from_half(self.pre_images[i], encoding[i] as usize)
+            }),
             randomness,
         }
     }
 }
 
 impl WotsSignature {
-    pub fn recover_public_key(&self, message: &Digest, layer_index: u32) -> Option<WotsPublicKey> {
-        let encoding = wots_encode(message, layer_index, &self.randomness)?;
+    pub fn recover_public_key(&self, message: &Digest, adrs0: F, adrs1: F) -> Option<WotsPublicKey> {
+        let encoding = wots_encode(message, adrs0, adrs1, &self.randomness)?;
         Some(WotsPublicKey(std::array::from_fn(|i| {
             iterate_hash_half_from_half(self.chain_tips[i], CHAIN_LENGTH - 1 - encoding[i] as usize)
         })))
@@ -85,23 +87,7 @@ impl WotsPublicKey {
     }
 }
 
-/// Advance the chain from a full pre-image `a` by `n` steps under the half-digest convention.
-///
-/// Step 0 → level-0: hash the full pre-image once with zero right input, then truncate to 4 FEs.
-/// Step k → level-k: hash [previous_level | 0,0,0,0] against zero right input, then truncate.
-///
-/// Applying `n` steps returns level-n.
-/// The terminal public-key tip is `iterate_hash_half(pre_image, CHAIN_LENGTH - 1)`.
-pub fn iterate_hash_half(a: Digest, n: usize) -> HalfDigest {
-    // Level-0: hash the full pre-image once.
-    let level0 = truncate_half(poseidon16_compress_pair(&a, &Default::default()));
-    // Further levels use the upper-half convention.
-    (0..n).fold(level0, |acc, _| {
-        truncate_half(poseidon16_compress_pair(&half_to_full(acc), &Default::default()))
-    })
-}
-
-/// Continue hashing from a 4-FE half-digest (already at some chain level) n more steps.
+/// Continue hashing from a 4-FE half-digest n more steps.
 pub fn iterate_hash_half_from_half(a: HalfDigest, n: usize) -> HalfDigest {
     (0..n).fold(a, |acc, _| {
         truncate_half(poseidon16_compress_pair(&half_to_full(acc), &Default::default()))
@@ -124,31 +110,33 @@ pub fn half_to_full(h: HalfDigest) -> Digest {
 
 pub fn find_randomness_for_wots_encoding(
     message: &Digest,
-    layer_index: u32,
+    adrs0: F,
+    adrs1: F,
     rng: &mut impl CryptoRng,
 ) -> ([F; RANDOMNESS_LEN_FE], [u8; V], usize) {
     let mut num_iters = 0;
     loop {
         num_iters += 1;
         let randomness = rng.random();
-        if let Some(encoding) = wots_encode(message, layer_index, &randomness) {
+        if let Some(encoding) = wots_encode(message, adrs0, adrs1, &randomness) {
             return (randomness, encoding, num_iters);
         }
     }
 }
 
-/// Encode (message, layer_index, randomness) into V chain indices.
+/// Encode (message, adrs0, adrs1, randomness) into V chain indices.
 ///
 /// Note: `message` must be a Digest (8 FEs). Hash external messages before calling.
 ///
-/// encoding_fe = poseidon(message[0..8] | [randomness[0..7], layer_index])
+/// Call A: poseidon(message[0..8], [randomness[0..6], adrs0, adrs1])
 ///
 /// Extract 4 x 4-bit chunks from the bottom 16 bits of each of the 8 FEs (little-endian),
 /// yielding exactly 32 indices. Valid iff sum of indices == TARGET_SUM.
-pub fn wots_encode(message: &Digest, layer_index: u32, randomness: &[F; RANDOMNESS_LEN_FE]) -> Option<[u8; V]> {
+pub fn wots_encode(message: &Digest, adrs0: F, adrs1: F, randomness: &[F; RANDOMNESS_LEN_FE]) -> Option<[u8; V]> {
     let mut input_right = [F::default(); 8];
     input_right[..RANDOMNESS_LEN_FE].copy_from_slice(randomness);
-    input_right[RANDOMNESS_LEN_FE] = F::from_usize(layer_index as usize);
+    input_right[RANDOMNESS_LEN_FE] = adrs0;
+    input_right[RANDOMNESS_LEN_FE + 1] = adrs1;
     let compressed = poseidon16_compress_pair(message, &input_right);
 
     if compressed.iter().any(|&kb| kb == -F::ONE) {
@@ -181,23 +169,20 @@ mod tests {
     fn test_wots_sign_recover_roundtrip() {
         let mut rng = rand::rng();
 
-        // Deterministic, non-random-looking message digest.
         let message = poseidon16_compress_pair(&Digest::default(), &Digest::default());
-        let layer_index = 0u32;
+        let adrs0 = F::new(0);
+        let adrs1 = F::new(0);
 
-        // Deterministic secret key material so the test doesn't depend on RNG support for Digest.
-        let pre_images: [Digest; SPX_WOTS_LEN] = std::array::from_fn(|i| {
-            let mut d = Digest::default();
-            d[0] = F::new(i as u32);
-            d[1] = F::new((i as u32).wrapping_mul(17));
-            d
+        let pre_images: [HalfDigest; SPX_WOTS_LEN] = std::array::from_fn(|i| {
+            [F::new(i as u32), F::new((i as u32).wrapping_mul(17)), F::new(0), F::new(0)]
         });
         let sk = WotsSecretKey::new(pre_images);
 
-        let (randomness, _encoding, _iters) = find_randomness_for_wots_encoding(&message, layer_index, &mut rng);
+        let (randomness, _encoding, _iters) =
+            find_randomness_for_wots_encoding(&message, adrs0, adrs1, &mut rng);
 
-        let sig = sk.sign_with_randomness(&message, layer_index, randomness);
-        let recovered = sig.recover_public_key(&message, layer_index).expect("valid signature");
+        let sig = sk.sign_with_randomness(&message, adrs0, adrs1, randomness);
+        let recovered = sig.recover_public_key(&message, adrs0, adrs1).expect("valid signature");
 
         assert_eq!(recovered, *sk.public_key());
     }

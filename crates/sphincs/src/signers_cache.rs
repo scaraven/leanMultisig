@@ -65,9 +65,16 @@ fn cache_path(first_pubkey: &SphincsPublicKey) -> PathBuf {
 }
 
 fn compute_signer(index: usize) -> (SphincsPublicKey, SphincsSig) {
-    let mut seed = [0u8; 20];
-    seed[0..8].copy_from_slice(&(index as u64).to_le_bytes());
-    let sk = SphincsSecretKey::new(seed);
+    // Derive sk_seed and sk_prf deterministically from the signer index.
+    let index_u64 = index as u64;
+    let sk_seed = [
+        F::new((index_u64 & 0xFFFF_FFFF) as u32),
+        F::new((index_u64 >> 32) as u32),
+        F::new(0),
+        F::new(0),
+    ];
+    let sk_prf = [F::new(index as u32 ^ 0xDEAD_BEEF), F::new(0), F::new(0), F::new(0)];
+    let sk = SphincsSecretKey::new(sk_seed, sk_prf);
     let pk = sk.public_key();
     let message = message_for_sphincs_signer(index);
     let sig = sk.sign(&message).expect("SPHINCS+ signing failed");

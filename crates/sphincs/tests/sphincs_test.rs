@@ -6,10 +6,11 @@ type F = KoalaBear;
 
 #[test]
 fn test_sphincs_sign_verify_deser() {
-    let keygen_seed: [u8; 20] = std::array::from_fn(|i| i as u8);
     let message: [F; MESSAGE_LEN_FE] = std::array::from_fn(|i| F::from_usize(i * 3 + 7));
+    let sk_seed: [F; 4] = std::array::from_fn(|i| F::from_usize(i + 1));
+    let sk_prf:  [F; 4] = std::array::from_fn(|i| F::from_usize(i + 5));
 
-    let sk = SphincsSecretKey::new(keygen_seed);
+    let sk = SphincsSecretKey::new(sk_seed, sk_prf);
     let pk = sk.public_key();
 
     let sig = sk.sign(&message).unwrap();
