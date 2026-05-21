@@ -1,11 +1,13 @@
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 
+pub mod address;
 pub mod core;
 pub mod fors;
 pub mod hypertree;
 pub mod signers_cache;
 pub mod wots;
 
+pub use address::*;
 pub use fors::*;
 pub use hypertree::*;
 pub use wots::*;
@@ -39,8 +41,15 @@ pub const V_GRINDING: usize = 0;
 // --- Lifetime / key material ---
 pub const LOG_LIFETIME: usize = 30; // 2^30 total signatures
 
+// --- ADRS field bit widths (used by address.rs) ---
+// SPX_TREE_BITS (22) doubles as the key-pair address width: each hypertree layer
+// manages 2^SPX_TREE_HEIGHT leaves, and tree addressing spans SPX_TREE_BITS levels.
+pub const SPX_KP_ADDR_BITS: usize = SPX_TREE_BITS; // 22 — key pair address width
+pub const SPX_CHAIN_ADDR_BITS: usize = 5;           // ceil(log2(SPX_WOTS_LEN)) = ceil(log2(32))
+pub const SPX_HASH_ADDR_BITS: usize = SPX_WOTS_LOGW; // 4 — one step per chain level
+
 // --- Encoding lengths ---
-pub const RANDOMNESS_LEN_FE: usize = 7;
+pub const RANDOMNESS_LEN_FE: usize = 6;
 pub const MESSAGE_LEN_FE: usize = 8;
 pub const MSG_RANDOMNESS_LEN_FE: usize = 4;
 
