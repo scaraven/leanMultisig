@@ -39,9 +39,9 @@ impl WotsSecretKey {
     pub fn new(pre_images: [Digest; V]) -> Self {
         Self {
             pre_images,
-            // Public key = level CHAIN_LENGTH: apply CHAIN_LENGTH total steps from pre_image.
-            // iterate_hash_half always starts with 1 hash of the full pre_image (level-0),
-            // then n more half_to_full hashes; so CHAIN_LENGTH total steps = CHAIN_LENGTH - 1 extra.
+            // Public key convention:
+            // level-0 is poseidon(pre_image, 0) truncated to 4 FEs, then we apply
+            // CHAIN_LENGTH - 1 further half-digest steps to reach the terminal chain tip.
             public_key: WotsPublicKey(std::array::from_fn(|i| iterate_hash_half(pre_images[i], CHAIN_LENGTH - 1))),
         }
     }
@@ -85,15 +85,13 @@ impl WotsPublicKey {
     }
 }
 
-/// Advance the chain from a full pre-image `a` by `n` steps under the upper-half convention.
+/// Advance the chain from a full pre-image `a` by `n` steps under the half-digest convention.
 ///
-/// Step 0 → level-0: always hash the pre-image once: left = pre_image (8 FEs), right = zeros.
-///                    level-0 = upper 4 FEs of poseidon(pre_image, 0).
-/// Step k → level-k: left = [0,0,0,0 | level-(k-1)], right = zeros.
+/// Step 0 → level-0: hash the full pre-image once with zero right input, then truncate to 4 FEs.
+/// Step k → level-k: hash [previous_level | 0,0,0,0] against zero right input, then truncate.
 ///
-/// Applying `n` steps returns level-n.  The full chain has CHAIN_LENGTH steps:
-///   public key = iterate_hash_half(pre_image, CHAIN_LENGTH), all using the convention above.
-///   signature tip for encoding e = iterate_hash_half(pre_image, e).
+/// Applying `n` steps returns level-n.
+/// The terminal public-key tip is `iterate_hash_half(pre_image, CHAIN_LENGTH - 1)`.
 pub fn iterate_hash_half(a: Digest, n: usize) -> HalfDigest {
     // Level-0: hash the full pre-image once.
     let level0 = truncate_half(poseidon16_compress_pair(&a, &Default::default()));
