@@ -61,9 +61,7 @@ impl WotsSecretKey {
     ) -> WotsSignature {
         let encoding = wots_encode(message, adrs0, adrs1, &randomness).unwrap();
         WotsSignature {
-            chain_tips: std::array::from_fn(|i| {
-                iterate_hash_half_from_half(self.pre_images[i], encoding[i] as usize)
-            }),
+            chain_tips: std::array::from_fn(|i| iterate_hash_half_from_half(self.pre_images[i], encoding[i] as usize)),
             randomness,
         }
     }
@@ -79,10 +77,24 @@ impl WotsSignature {
 }
 
 impl WotsPublicKey {
-    pub fn hash(&self) -> HalfDigest {
-        let init = truncate_half(poseidon16_compress_pair(&half_to_full(self.0[0]), &half_to_full(self.0[1])));
-        self.0[2..].iter().fold(init, |acc, &chunk| {
-            truncate_half(poseidon16_compress_pair(&half_to_full(acc), &half_to_full(chunk)))
+    /// Compress all V chain tips into a single HalfDigest.
+    ///
+    /// Tweak layout (uniform with FORS and hypertree Merkle hashing):
+    ///   left  = [pk_seed[0..4] | adrs0, adrs1, 0, 0]   (fixed for all steps)
+    ///   right = [acc[0..4] | next_tip[0..4]]
+    pub fn hash(&self, pk_seed: HalfDigest, adrs: crate::address::Adrs) -> HalfDigest {
+        let mut left = [F::ZERO; 8];
+        left[..4].copy_from_slice(&pk_seed);
+        left[4] = adrs.adrs0;
+        left[5] = adrs.adrs1;
+        let mut right = [F::ZERO; 8];
+        right[..4].copy_from_slice(&self.0[0]);
+        right[4..8].copy_from_slice(&self.0[1]);
+        let init = truncate_half(poseidon16_compress_pair(&left, &right));
+        self.0[2..].iter().fold(init, |acc, &tip| {
+            right[..4].copy_from_slice(&acc);
+            right[4..8].copy_from_slice(&tip);
+            truncate_half(poseidon16_compress_pair(&left, &right))
         })
     }
 }
@@ -174,12 +186,16 @@ mod tests {
         let adrs1 = F::new(0);
 
         let pre_images: [HalfDigest; SPX_WOTS_LEN] = std::array::from_fn(|i| {
-            [F::new(i as u32), F::new((i as u32).wrapping_mul(17)), F::new(0), F::new(0)]
+            [
+                F::new(i as u32),
+                F::new((i as u32).wrapping_mul(17)),
+                F::new(0),
+                F::new(0),
+            ]
         });
         let sk = WotsSecretKey::new(pre_images);
 
-        let (randomness, _encoding, _iters) =
-            find_randomness_for_wots_encoding(&message, adrs0, adrs1, &mut rng);
+        let (randomness, _encoding, _iters) = find_randomness_for_wots_encoding(&message, adrs0, adrs1, &mut rng);
 
         let sig = sk.sign_with_randomness(&message, adrs0, adrs1, randomness);
         let recovered = sig.recover_public_key(&message, adrs0, adrs1).expect("valid signature");

@@ -1,29 +1,28 @@
 use crate::{
-    F, SPX_CHAIN_ADDR_BITS, SPX_D, SPX_FORS_HEIGHT, SPX_KP_ADDR_BITS, SPX_TREE_BITS,
-    SPX_WOTS_LEN, SPX_WOTS_W,
+    F, SPX_CHAIN_ADDR_BITS, SPX_D, SPX_FORS_HEIGHT, SPX_KP_ADDR_BITS, SPX_TREE_BITS, SPX_WOTS_LEN, SPX_WOTS_W,
 };
 use backend::PrimeField32;
 
 // ADRS type codes (3 bits, values 0–6)
-pub const WOTS_HASH:  u32 = 0;
-pub const WOTS_PK:    u32 = 1;
-pub const TREE:       u32 = 2;
-pub const FORS_TREE:  u32 = 3;
+pub const WOTS_HASH: u32 = 0;
+pub const WOTS_PK: u32 = 1;
+pub const TREE: u32 = 2;
+pub const FORS_TREE: u32 = 3;
 pub const FORS_ROOTS: u32 = 4;
-pub const WOTS_PRF:   u32 = 5;
-pub const FORS_PRF:   u32 = 6;
+pub const WOTS_PRF: u32 = 5;
+pub const FORS_PRF: u32 = 6;
 
 // Derived bounds (as u32 for use in debug_assert)
-const MAX_LAYER:    u32 = (SPX_D - 1) as u32;
-const MAX_TYPE:     u32 = 6;
-const MAX_TREE:     u32 = (1u32 << SPX_TREE_BITS) - 1;
-const MAX_KP_ADDR:  u32 = (1u32 << SPX_KP_ADDR_BITS) - 1;
-const MAX_CHAIN:    u32 = (SPX_WOTS_LEN - 1) as u32;
+const MAX_LAYER: u32 = (SPX_D - 1) as u32;
+const MAX_TYPE: u32 = 6;
+const MAX_TREE: u32 = (1u32 << SPX_TREE_BITS) - 1;
+const MAX_KP_ADDR: u32 = (1u32 << SPX_KP_ADDR_BITS) - 1;
+const MAX_CHAIN: u32 = (SPX_WOTS_LEN - 1) as u32;
 // hash_address indexes steps 0..SPX_WOTS_W-2 (the verifier completes remaining steps,
 // so the last starting step is SPX_WOTS_W-2 = 14, not SPX_WOTS_W-1 = 15).
-const MAX_HASH:     u32 = (SPX_WOTS_W - 2) as u32;
+const MAX_HASH: u32 = (SPX_WOTS_W - 2) as u32;
 const MAX_TREE_IDX: u32 = (1u32 << SPX_FORS_HEIGHT) - 1;
-const MAX_TREE_HT:  u32 = SPX_FORS_HEIGHT as u32;
+const MAX_TREE_HT: u32 = SPX_FORS_HEIGHT as u32;
 
 // Bit offsets within adrs0
 const ADRS0_TYPE_SHIFT: u32 = 2;
@@ -31,7 +30,7 @@ const ADRS0_TREE_SHIFT: u32 = 2 + 3; // layer(2) + type(3)
 
 // Bit offsets within adrs1 — WOTS / FORS_ROOTS layout
 const ADRS1_CHAIN_SHIFT: u32 = SPX_KP_ADDR_BITS as u32;
-const ADRS1_HASH_SHIFT:  u32 = SPX_KP_ADDR_BITS as u32 + SPX_CHAIN_ADDR_BITS as u32;
+const ADRS1_HASH_SHIFT: u32 = SPX_KP_ADDR_BITS as u32 + SPX_CHAIN_ADDR_BITS as u32;
 
 // Bit offsets within adrs1 — TREE / FORS_TREE layout
 const ADRS1_TREE_HT_SHIFT: u32 = SPX_FORS_HEIGHT as u32;
@@ -144,7 +143,7 @@ impl Adrs {
         let raw = self.adrs0.as_canonical_u32();
         // Preserve layer (bits 1..0) and tree_address (bits 26..5); replace type (bits 4..2).
         let layer = raw & ((1 << ADRS0_TYPE_SHIFT) - 1);
-        let tree  = raw & !((1 << ADRS0_TREE_SHIFT) - 1);
+        let tree = raw & !((1 << ADRS0_TREE_SHIFT) - 1);
         self.adrs0 = F::new(layer | (adrs_type << ADRS0_TYPE_SHIFT) | tree);
         self.adrs1 = F::new(0);
     }
@@ -157,7 +156,7 @@ mod tests {
 
     fn unpack_adrs0(adrs: &Adrs) -> (u32, u32, u32) {
         let raw = adrs.adrs0.as_canonical_u32();
-        let layer     = raw & ((1 << ADRS0_TYPE_SHIFT) - 1);
+        let layer = raw & ((1 << ADRS0_TYPE_SHIFT) - 1);
         let adrs_type = (raw >> ADRS0_TYPE_SHIFT) & 0x7;
         let tree_addr = (raw >> ADRS0_TREE_SHIFT) & MAX_TREE;
         (layer, adrs_type, tree_addr)
@@ -166,11 +165,11 @@ mod tests {
     #[test]
     fn test_wots_hash_roundtrip() {
         let layer = 2;
-        let tree  = MAX_TREE - 1;
-        let kp    = MAX_KP_ADDR;
+        let tree = MAX_TREE - 1;
+        let kp = MAX_KP_ADDR;
         let chain = MAX_CHAIN;
-        let hash  = MAX_HASH;
-        let adrs  = Adrs::wots_hash(layer, tree, kp, chain, hash);
+        let hash = MAX_HASH;
+        let adrs = Adrs::wots_hash(layer, tree, kp, chain, hash);
 
         let (l, t, tr) = unpack_adrs0(&adrs);
         assert_eq!(l, layer);
@@ -267,7 +266,7 @@ mod tests {
     #[test]
     fn test_distinct_types_distinct_adrs0() {
         let layer = 0;
-        let tree  = 0x1;
+        let tree = 0x1;
         let types = [WOTS_HASH, WOTS_PK, TREE, FORS_TREE, FORS_ROOTS, WOTS_PRF, FORS_PRF];
         let adrs0_vals: Vec<u32> = types
             .iter()

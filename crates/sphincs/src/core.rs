@@ -7,9 +7,8 @@ use crate::address::Adrs;
 use crate::fors::ForsSignature;
 use crate::hypertree::HypertreeSignature;
 use crate::{
-    DIGEST_SIZE, Digest, F, HalfDigest, HypertreeSecretKey,
-    MESSAGE_LEN_FE, MSG_RANDOMNESS_LEN_FE, SPX_FORS_HEIGHT, SPX_FORS_TREES, SPX_TREE_HEIGHT,
-    fors, hypertree,
+    DIGEST_SIZE, Digest, F, HalfDigest, HypertreeSecretKey, MESSAGE_LEN_FE, MSG_RANDOMNESS_LEN_FE, SPX_FORS_HEIGHT,
+    SPX_FORS_TREES, SPX_TREE_HEIGHT, fors, hypertree,
     wots::{half_to_full, truncate_half},
 };
 
@@ -72,7 +71,7 @@ pub fn hmsg(r: HalfDigest, pk_seed: HalfDigest, pk_root: HalfDigest, message: &[
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SphincsSecretKey {
     pub sk_seed: HalfDigest,
-    pub sk_prf:  HalfDigest,
+    pub sk_prf: HalfDigest,
     pub pk_seed: HalfDigest,
     pub pk_root: HalfDigest,
 }
@@ -94,18 +93,21 @@ pub struct SphincsSig {
 impl SphincsSecretKey {
     pub fn new(sk_seed: HalfDigest, sk_prf: HalfDigest) -> Self {
         let pk_seed = truncate_half(poseidon16_compress_pair(&half_to_full(sk_seed), &half_to_full(sk_prf)));
-
-        // Temporary shim: derive a legacy [u8; 20] seed from sk_seed so that fors/hypertree
-        // (not yet updated) can still be constructed. Removed when those modules are updated.
-        let legacy_seed = half_digest_to_legacy_seed(sk_seed);
-        let hypertree_sk = HypertreeSecretKey::new(legacy_seed);
+        let hypertree_sk = HypertreeSecretKey::new(sk_seed, pk_seed);
         let pk_root = hypertree_sk.public_key().0;
-
-        Self { sk_seed, sk_prf, pk_seed, pk_root }
+        Self {
+            sk_seed,
+            sk_prf,
+            pk_seed,
+            pk_root,
+        }
     }
 
     pub fn public_key(&self) -> SphincsPublicKey {
-        SphincsPublicKey { pk_seed: self.pk_seed, pk_root: self.pk_root }
+        SphincsPublicKey {
+            pk_seed: self.pk_seed,
+            pk_root: self.pk_root,
+        }
     }
 
     pub fn sign(&self, message: &[F; MESSAGE_LEN_FE]) -> Result<SphincsSig, Box<dyn std::error::Error>> {
@@ -115,19 +117,22 @@ impl SphincsSecretKey {
 
         let (leaf_idx, tree_address, fors_indices) = extract_digest_hash(&message_digest);
 
-        let legacy_seed = half_digest_to_legacy_seed(self.sk_seed);
-        let (fors_sk, _) = fors::fors_key_gen(legacy_seed);
+        let (fors_sk, _) = fors::fors_key_gen(self.sk_seed, self.pk_seed);
         let fors_sig = fors::fors_sign(&fors_sk, &fors_indices);
         let fors_pk = fors_sk.public_key();
 
         let hypertree_sig = hypertree::hypertree_sign(
-            &HypertreeSecretKey::new(legacy_seed),
+            &HypertreeSecretKey::new(self.sk_seed, self.pk_seed),
             &half_to_full(fors_pk.0),
             leaf_idx,
             tree_address,
         );
 
-        Ok(SphincsSig { r, fors_sig, hypertree_sig })
+        Ok(SphincsSig {
+            r,
+            fors_sig,
+            hypertree_sig,
+        })
     }
 }
 
@@ -137,7 +142,7 @@ impl SphincsPublicKey {
 
         let (leaf_idx, tree_address, fors_indices) = extract_digest_hash(&message_digest);
 
-        let fors_pk = match fors::fors_verify(&sig.fors_sig, &fors_indices) {
+        let fors_pk = match fors::fors_verify(&sig.fors_sig, &fors_indices, self.pk_seed) {
             Ok(pk) => pk,
             Err(_) => return false,
         };
@@ -148,25 +153,13 @@ impl SphincsPublicKey {
             leaf_idx,
             tree_address,
             &self.pk_root,
+            self.pk_seed,
         )
     }
 
     pub fn root(&self) -> HalfDigest {
         self.pk_root
     }
-}
-
-// ---------------------------------------------------------------------------
-// Temporary shim: convert HalfDigest → [u8; 20] legacy seed.
-// Removed when fors.rs and hypertree.rs are updated to the new API.
-// ---------------------------------------------------------------------------
-
-fn half_digest_to_legacy_seed(hd: HalfDigest) -> [u8; 20] {
-    let mut seed = [0u8; 20];
-    for (i, fe) in hd.iter().enumerate() {
-        seed[i * 4..(i + 1) * 4].copy_from_slice(&fe.as_canonical_u32().to_le_bytes());
-    }
-    seed
 }
 
 // ---------------------------------------------------------------------------

@@ -8,7 +8,7 @@ type F = KoalaBear;
 fn test_sphincs_sign_verify_deser() {
     let message: [F; MESSAGE_LEN_FE] = std::array::from_fn(|i| F::from_usize(i * 3 + 7));
     let sk_seed: [F; 4] = std::array::from_fn(|i| F::from_usize(i + 1));
-    let sk_prf:  [F; 4] = std::array::from_fn(|i| F::from_usize(i + 5));
+    let sk_prf: [F; 4] = std::array::from_fn(|i| F::from_usize(i + 5));
 
     let sk = SphincsSecretKey::new(sk_seed, sk_prf);
     let pk = sk.public_key();

@@ -200,25 +200,24 @@ which constructs a custom Poseidon input layout and returns a full `Digest`.
 
 ### FORS leaf derivation (was: derive_leaf_secret)
 
-Per the spec, producing a FORS leaf node is a two-step operation:
+Producing a FORS leaf node is a two-step operation (matching the spec's distinction
+between `FORS_PRF` for key derivation and `FORS_TREE` at height 0 for leaf hashing):
 
 ```rust
 // Step 1 — PRF: derive the secret value (FORS_PRF type)
-// adrs: layer=0, type=FORS_PRF, key_pair_address=fors_kp_address, tree_index=leaf_index
-let adrs_prf = Adrs::fors_prf(tree_address, key_pair_address, leaf_index);
+// adrs: layer=0, type=FORS_PRF, tree_index=leaf_index (kp_addr unused, captured via tree_addr)
+let adrs_prf = Adrs::fors_prf(tree_address, 0, leaf_index);
 let sk: HalfDigest = prf(pk_seed, sk_seed, adrs_prf);
 
 // Step 2 — F: hash the secret into the public leaf node (FORS_TREE type, height=0)
-// adrs: layer=0, type=FORS_TREE, key_pair_address=fors_kp_address, tree_height=0, tree_index=leaf_index
-let adrs_f = Adrs::fors_tree(tree_address, key_pair_address, 0, leaf_index);
-let leaf_node: HalfDigest = f(pk_seed, adrs_f, sk);
+// adrs: layer=0, type=FORS_TREE, tree_height=0, tree_index=leaf_index
+let adrs_f = Adrs::fors_tree(tree_address, 0, leaf_index);
+let leaf_node: HalfDigest = hash_leaf(sk, pk_seed, tree_address, leaf_index);
 ```
 
-The current `derive_leaf_secret` returns the raw secret; `hash_leaf` applies the bare
-compression. With the new design both steps get their own ADRS, matching the spec's
-distinction between `FORS_PRF` (key derivation) and `FORS_TREE` at height 0 (leaf hashing).
-The verifier only ever sees `leaf_node` (the F output) from the signature hint — the secret
-`sk` is never revealed to the verifier, which processes only the already-hashed leaf.
+The signature reveals `sk` (the raw PRF output) as `leaf_secret` in `ForsTreeSig`.
+The verifier recomputes `leaf_node = hash_leaf(sk, pk_seed, tree, leaf)` and then
+walks the auth path — `sk` itself is never used directly as a Merkle input.
 
 ---
 
@@ -238,7 +237,7 @@ impl Adrs {
     pub fn wots_hash(layer: u32, tree_addr: u32, kp_addr: u32, chain: u32, hash: u32) -> Self { ... }
     pub fn wots_pk(layer: u32, tree_addr: u32, kp_addr: u32) -> Self { ... }
     pub fn tree(layer: u32, tree_addr: u32, tree_height: u32, tree_index: u32) -> Self { ... }
-    pub fn fors_tree(tree_addr: u32, kp_addr: u32, tree_height: u32, tree_index: u32) -> Self { ... }
+    pub fn fors_tree(tree_addr: u32, tree_height: u32, tree_index: u32) -> Self { ... }  // kp_addr unused, captured via tree_addr
     pub fn fors_roots(tree_addr: u32, kp_addr: u32) -> Self { ... }
     pub fn wots_prf(layer: u32, tree_addr: u32, kp_addr: u32, chain: u32) -> Self { ... }
     pub fn fors_prf(tree_addr: u32, kp_addr: u32, leaf_index: u32) -> Self { ... }
@@ -352,98 +351,139 @@ but `pk_seed` remains a constant and only the ADRS slot changes.
 
 ## Migration Plan
 
-### Phase 1 — Rust signer (this task)
+### Phase 1 — Rust signer ✅ COMPLETE
 
-**New file: `crates/sphincs/src/address.rs`**
-- Define `Adrs` struct with two `F` fields.
-- Implement all 7 constructor functions and `set_type_and_clear`.
-- Unit tests: round-trip pack/unpack for each type.
+All Rust signer files have been updated. Every `cargo test --release -p sphincs` test
+passes (17 unit tests + 1 integration test). The legacy `[u8; 20]` seed and all temporary
+shims have been removed.
 
-**Update `crates/sphincs/src/lib.rs`**
-- Add `pub mod address; pub use address::*;`
-- Add `SK_SEED_LEN`, `SK_PRF_LEN`, `PK_SEED_LEN` = `HALF_DIGEST_SIZE` (all 4 FEs).
+**`crates/sphincs/src/address.rs`** ✅
+- `Adrs` struct with two `F` fields.
+- All 7 constructor functions (`wots_hash`, `wots_pk`, `tree`, `fors_tree`, `fors_roots`,
+  `wots_prf`, `fors_prf`) and `set_type_and_clear`.
+- 9 unit tests covering every constructor and type-distinctness.
+- Key implementation note: `MAX_HASH = SPX_WOTS_W - 2 = 14` (not 15) because the
+  verifier completes the remaining steps; `hash_address=15` would overflow the KoalaBear
+  prime when packed into `adrs1`.
 
-**Update `crates/sphincs/src/wots.rs`**
-- Replace `derive_wots_preimages` with `prf(pk_seed, sk_seed, adrs: Adrs::wots_prf(...))`,
-  returning `HalfDigest` (not `Digest`).
-- Remove `iterate_hash_half` (the variant that takes a full Digest as first step). All
-  chain steps — including the first from a freshly derived pre-image — use
-  `iterate_hash_half_from_half`. This is the single unified chain function.
-- Replace `poseidon16_compress_pair(message, right)` chain steps with
-  `adrs_compress(pk_seed, adrs, ...)` using `Adrs::wots_hash(...)`.
-- Thread `pk_seed: HalfDigest, sk_seed: HalfDigest` through all key-gen functions.
-- `wots_encode` gains `adrs0: F, adrs1: F` replacing `layer_index`; `RANDOMNESS_LEN_FE`
-  becomes 6; right halves become `[r[0..5], adrs0, adrs1]` for Call A and
-  `[adrs0, adrs1, 0, 0, 0, 0, 0, 0]` for Call B.
+**`crates/sphincs/src/lib.rs`** ✅
+- `pub mod address; pub use address::*;`
+- `RANDOMNESS_LEN_FE = 6` (was 7).
+- New constants: `SPX_KP_ADDR_BITS`, `SPX_CHAIN_ADDR_BITS`, `SPX_HASH_ADDR_BITS`.
 
-**Update `crates/sphincs/src/fors.rs`**
-- Replace `derive_leaf_secret` with `prf(pk_seed, sk_seed, adrs: Adrs::fors_prf(...))`.
-- Replace bare `poseidon16_compress_pair` Merkle nodes with `adrs_compress` using
-  `Adrs::fors_tree(...)` with `set_type_and_clear` then `set_tree_height/index`.
-- Replace `fold_roots` with FORS_ROOTS-typed calls.
+**`crates/sphincs/src/wots.rs`** ✅
+- `WotsSecretKey::pre_images` is `[HalfDigest; V]` (was `[Digest; V]`).
+- `iterate_hash_half` (full-Digest variant) removed; all chain steps use
+  `iterate_hash_half_from_half`.
+- `wots_encode(message, adrs0, adrs1, randomness)` — right half is
+  `[r[0..6], adrs0, adrs1]`. `RANDOMNESS_LEN_FE = 6`.
+- `find_randomness_for_wots_encoding`, `sign_with_randomness`, `recover_public_key` all
+  take `(adrs0: F, adrs1: F)`.
+- `WotsPublicKey::hash(pk_seed: HalfDigest, adrs: Adrs)` — uniform tweak layout:
+  `left = [pk_seed | adrs0, adrs1, 0, 0]`, fold with `right = [acc | next_tip]`.
 
-**Update `crates/sphincs/src/hypertree.rs`**
-- Replace `derive_wots_preimages` calls to use the new `wots.rs` API (now takes adrs).
-- Replace XMSS Merkle node hashing with `adrs_compress` using `Adrs::tree(...)`, setting
-  `tree_height` and `tree_index` per the node position (matching Algorithm 9 / 11 in the spec).
-- Remove `hash_inter_layer_message` entirely. Per the spec (Algorithm 12 `ht_sign`), the
-  raw Merkle root of layer `l` is passed directly as the message into layer `l+1`'s WOTS
-  encoding — no extra hash. Domain separation between layers is already provided by the
-  `layer` field in `adrs0` of the WOTS encoding call, so the additional Poseidon wrapping
-  is redundant and non-standard.
+**`crates/sphincs/src/fors.rs`** ✅
+- `ForsSecretKey` holds `sk_seed: HalfDigest` and `pk_seed: HalfDigest` (no `[u8; 20]`).
+- `derive_leaf_secret` → `prf(pk_seed, sk_seed, Adrs::fors_prf(tree, 0, leaf))`.
+- `hash_leaf(secret, pk_seed, tree_index, leaf_index)` uses `Adrs::fors_tree(tree, 0, leaf)`.
+- `hash_merkle_node(left, right, pk_seed, tree, height, node_idx)` uses `Adrs::fors_tree`.
+- `fold_roots(pk_seed, roots)` — each step `i` uses `Adrs::fors_roots(0, i)`.
+- `fors_key_gen(sk_seed, pk_seed)`, `fors_verify(sig, indices, pk_seed)`.
 
-**Update `crates/sphincs/src/core.rs`**
-- `SphincsSecretKey`: replace 20-byte seed with `{sk_seed, sk_prf, pk_seed, pk_root}`.
-- `SphincsPublicKey`: add `pk_seed` field.
-- `SphincsSecretKey::new` derives PK.seed from (SK.seed, SK.prf) via PRF, then builds
-  hypertree using the new `HypertreeSecretKey` interface.
-- `PRFmsg` for message nonce: `poseidon([sk_prf | opt_rand], message)`.
-- `Hmsg` for digest: `poseidon([R | pk_seed], [pk_root | message[0..4]])`, then
-  second call for remaining message bytes.
+**`crates/sphincs/src/hypertree.rs`** ✅
+- `HypertreeSecretKey::new(sk_seed: HalfDigest, pk_seed: HalfDigest)` (no `[u8; 20]`).
+- `derive_wots_preimages` removed; pre-images derived inline via
+  `prf(pk_seed, sk_seed, Adrs::wots_prf(layer, tree_addr, local_leaf, chain))`.
+- `hash_xmss_node(l, r, pk_seed, layer, tree_addr, height, node_idx)` uses `Adrs::tree`.
+- `build_layer_tree(sk_seed, pk_seed, layer, tree_address)`.
+- `hash_inter_layer_message` removed; layers pass `half_to_full(root)` directly.
+- `hypertree_verify` takes `pk_seed: HalfDigest`; all hashing is tweaked.
+- WOTS signing uses `Adrs::wots_hash` for `find_randomness_for_wots_encoding` and
+  `sign_with_randomness`; WOTS verify uses same ADRS for `recover_public_key`.
+- WOTS PK compression uses `Adrs::wots_pk` for `WotsPublicKey::hash`.
 
-**Update `crates/sphincs/tests/sphincs_test.rs`**
-- Existing round-trip test should pass unchanged after structural update.
-- Add a new test: verify that `wots_sign` with new ADRS matches `wots_verify`.
+**`crates/sphincs/src/core.rs`** ✅
+- `SphincsSecretKey { sk_seed, sk_prf, pk_seed, pk_root }` (was `seed: [u8; 20]`).
+- `SphincsPublicKey { pk_seed, pk_root }` (was single `pk_root: HalfDigest`).
+- `prf`, `prf_msg`, `hmsg` free functions implemented.
+- `half_digest_to_legacy_seed` shim removed.
+- `sign()` uses `fors_key_gen(sk_seed, pk_seed)` and `HypertreeSecretKey::new(sk_seed, pk_seed)`.
+- `verify()` passes `self.pk_seed` to `fors_verify` and `hypertree_verify`.
 
-**Breaking change: `signers_cache.rs`**
-- Cache fingerprint changes (pk includes pk_seed now). Delete the old cache file and
-  regenerate on first run — handled automatically by the footprint check.
+**`crates/sphincs/src/signers_cache.rs`** ✅ (no code changes needed)
+- Already uses `[F; 4]` sk_seed/sk_prf after a previous update.
+- Cache fingerprint will change (pk now includes pk_seed). Delete
+  `target/signers-cache/benchmark_sphincs_cache_*.bin` before the first benchmark run.
 
 ### Phase 2 — zkDSL verifier updates
 
-After the Rust signer is updated and tests pass:
+The Rust signer is complete. The zkDSL verifier files in `crates/rec_aggregation/` need
+to be updated to match the new hash layouts. All changes are mechanical: add the uniform
+tweak (left half = `[pk_seed | adrs0, adrs1, 0, 0]`) to every Poseidon call that currently
+uses a bare compression, and update `RANDOMNESS_LEN` from 8 to 6.
 
-**`sphincs_utils.py`**
-- Add `adrs_compress(pk_seed, adrs0_const, adrs1_const, left, right, out)` helper.
-  When `adrs0_const` and `adrs1_const` are Python integers (always true in unrolled
-  loops), the compiler will constant-fold the left half construction.
-- Update `RANDOMNESS_LEN` from 8 to 6 (dropping the old `layer_index` slot and the
-  now-redundant 7th random FE; both ADRS words are reconstructed as compile-time
-  constants, not stored in the hint).
+**`sphincs_utils.py`** — add `adrs_compress` helper and update `RANDOMNESS_LEN`
+```python
+RANDOMNESS_LEN = 6  # was 8; adrs0/adrs1 are compile-time constants, not stored
 
-**`sphincs_wots.py`**
-- `wots_encode_and_complete`: replace `assert randomness[RANDOMNESS_LEN - 1] == layer_index`
-  with `assert randomness[6] == adrs0` and `assert randomness[7] == adrs1`, where both
-  are compile-time constants for the encoding call at layer `l`.
-- Pass `pk_seed` and per-step `adrs1` constants into `_chain_hash_pair_const` so each
-  chain step uses the correct ADRS.
+@inline
+def adrs_compress(pk_seed, adrs0, adrs1, data_right, out):
+    left = Array(DIGEST_LEN)
+    copy_4(pk_seed, left)
+    left[4] = adrs0
+    left[5] = adrs1
+    left[6] = 0
+    left[7] = 0
+    poseidon16_compress(left, data_right, out)
+    return
+```
+When `adrs0` and `adrs1` are compile-time Python integers (always true in unrolled loops),
+the compiler folds the left-half construction to a literal vector — zero runtime cost.
 
-**`sphincs_fors.py`**
-- `fors_merkle_verify`: replace bare `poseidon16_compress(state_in, sibling, out)` calls
-  with `adrs_compress(pk_seed, adrs0, adrs1, ...)` where `adrs1` encodes the current
-  `(tree_height, tree_index)`. Since these are runtime values (they depend on
-  `leaf_index`), `adrs1` will be a runtime expression:
-  `adrs1 = tree_index + tree_height * 2**15` (fits in 31 bits since tree_index < 2^15
-  and tree_height < 2^4).
+**`sphincs_wots.py`** — thread `pk_seed` and ADRS through chain hashing
+- Add `pk_seed` parameter to `wots_encode_and_complete` and `_chain_hash_pair_const`.
+- In `wots_encode_and_complete`: replace the final `assert randomness[7] == layer_index`
+  with `assert randomness[6] == adrs0` and assert that `adrs0` matches the expected
+  `pack_adrs0(layer=l, type=WOTS_HASH, tree_addr=...)` (both compile-time constants).
+- In `_chain_hash_pair_const(n, pk_seed, adrs0, adrs1, input, output)`: replace bare
+  `poseidon16_compress(input, right, output)` with `adrs_compress(pk_seed, adrs0, adrs1,
+  right, output)`. The `adrs1` for each step encodes `(chain, hash_step)` and is a
+  compile-time constant when unrolled over `n`.
+- Note: WOTS chain steps currently use `right = [input | zeros]`; the new layout keeps
+  this but gains the tweaked left half.
 
-**`sphincs_hypertree.py`**
-- `hypertree_merkle_verify`: same as FORS — `adrs1` is runtime based on position.
-- `hypertree_verify`: pass `pk_seed` through the layer loop as a constant.
+**`sphincs_fors.py`** — add ADRS to Merkle verification and leaf hashing
+- `fors_merkle_verify(pk_seed, tree_index, leaf_index, leaf_node, auth_path, out_root)`:
+  replace bare `poseidon16_compress(state_in, sibling, out)` at each level with:
+  ```python
+  adrs1 = tree_index_at_level + level_height * (2**SPX_FORS_HEIGHT)
+  adrs0 = pack_adrs0(layer=0, type=FORS_TREE, tree_addr=tree_index)
+  adrs_compress(pk_seed, adrs0, adrs1, right, out)
+  ```
+  `adrs1` is a runtime value (depends on current `tree_index` at each level), so it
+  costs one field addition per Merkle step.
+- Leaf node hashing (FORS_TREE height=0):
+  ```python
+  adrs1 = leaf_index   # tree_index = leaf_index, tree_height = 0
+  adrs_compress(pk_seed, adrs0_fors_tree, adrs1, half_to_full(leaf_secret), leaf_node)
+  ```
+- `fold_roots(pk_seed, roots, out)`: each fold step `i` uses
+  `adrs0 = pack_adrs0(0, FORS_ROOTS, 0)`, `adrs1 = i`.
 
-**`sphincs_aggregate.py`**
-- `decompose_message_digest`: `pk_seed` is already available (it is part of the public
-  key hint). Load it once and pass through to all sub-verifiers.
-- `sphincs_verify` signature changes to `sphincs_verify(pk_seed, pk_root, message, ...)`.
+**`sphincs_hypertree.py`** — add ADRS to XMSS Merkle verification and between-layer message
+- `xmss_merkle_verify(pk_seed, layer, layer_tree_addr, leaf_index, leaf_node, auth_path, out)`:
+  replace bare Poseidon at each level with `adrs_compress` using `Adrs::tree` layout:
+  `adrs0 = pack_adrs0(layer, TREE, layer_tree_addr)`, `adrs1 = node_index + height * (2**SPX_TREE_HEIGHT)`.
+- Remove any `hash_inter_layer_message` call; the raw root `HalfDigest` is passed directly
+  as the next layer's message via `half_to_full(root)`.
+- Thread `pk_seed` through the layer loop as a constant loaded from the public key hint.
+- WOTS PK compression (`wots_pk_compress`): call with `Adrs::wots_pk` layout —
+  `adrs0 = pack_adrs0(layer, WOTS_PK, tree_addr)`, `adrs1 = layer_leaf_index`.
+
+**`sphincs_aggregate.py`** — load `pk_seed` from public key hint
+- Public key hint now has 8 FEs: `[pk_seed[0..4] | pk_root[0..4]]`.
+- Load `pk_seed = hint[0..4]`, `pk_root = hint[4..8]`.
+- Pass `pk_seed` into every `sphincs_verify(pk_seed, pk_root, message, sig)` call.
 
 ### Key invariant
 
