@@ -5,13 +5,15 @@ from ..zkdsl_implem.utils import *
 
 def main():
     build_preamble_memory()
-    roots = Array(SPX_FORS_TREES * DIGEST_LEN)
+    pk_seed = Array(HALF_DIGEST_LEN)
+    hint_witness("pk_seed", pk_seed)
+    roots = Array(SPX_FORS_TREES * HALF_DIGEST_LEN)
     hint_witness("roots", roots)
-    expected_output = Array(DIGEST_LEN)
+    expected_output = Array(HALF_DIGEST_LEN)
     hint_witness("expected", expected_output)
 
-    output = Array(DIGEST_LEN)
-    fold_roots(roots, output)
-    for i in unroll(0, DIGEST_LEN):
+    output = Array(HALF_DIGEST_LEN)
+    fold_roots(pk_seed, roots, output)
+    for i in unroll(0, HALF_DIGEST_LEN):
         assert expected_output[i] == output[i]
     return

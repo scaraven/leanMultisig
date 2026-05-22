@@ -399,6 +399,14 @@ def set_to_8_zeros(a):
     return
 
 @inline
+def copy_4(a, b):
+    b[0] = a[0]
+    b[1] = a[1]
+    b[2] = a[2]
+    b[3] = a[3]
+    return
+
+@inline
 def copy_6(a, b):
     dot_product_ee(a, ONE_EF_PTR, b)
     b[DIM] = a[DIM]

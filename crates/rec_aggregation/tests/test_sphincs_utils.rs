@@ -40,6 +40,7 @@ fn test_fold_roots_sphincs() {
         let hash = fold_roots(pk_seed, &data);
         let roots_flat: Vec<F> = data.iter().flatten().copied().collect();
         let hints = HashMap::from([
+            ("pk_seed".to_string(), vec![pk_seed.to_vec()]),
             ("roots".to_string(), vec![roots_flat]),
             ("expected".to_string(), vec![hash.to_vec()]),
         ]);
