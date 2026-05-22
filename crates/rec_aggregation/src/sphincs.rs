@@ -6,12 +6,12 @@ use lean_vm::{DIGEST_LEN, ExecutionMetadata, ExecutionWitness, F};
 use serde::{Deserialize, Serialize};
 use sphincs::SPX_TREE_HEIGHT;
 use sphincs::{
-    MESSAGE_LEN_FE, MSG_RANDOMNESS_LEN_FE,
-    core::{SphincsPublicKey, SphincsSig, extract_digest_parts, make_digest_right},
+    HALF_DIGEST_SIZE, MESSAGE_LEN_FE,
+    core::{SphincsPublicKey, SphincsSig, extract_digest_parts, hmsg},
     fors_sig_to_flat,
 };
 use std::collections::HashMap;
-use utils::{poseidon_compress_slice, poseidon16_compress_pair};
+use utils::{poseidon16_compress_pair, poseidon_compress_slice};
 
 use crate::PREAMBLE_MEMORY_LEN;
 
@@ -55,7 +55,7 @@ pub struct AggregatedSPHINCS {
 ///   seg_pubkeys  = slice_hash_with_iv(pubkeys_flat)
 ///   seg_messages = slice_hash_with_iv(messages_flat)
 ///   commitment   = poseidon(poseidon(seg_nsigs, seg_pubkeys), seg_messages)
-pub fn sphincs_public_input(pubkeys: &[[F; DIGEST_LEN]], messages: &[[F; MESSAGE_LEN_FE]]) -> [F; DIGEST_LEN] {
+pub fn sphincs_public_input(pubkeys: &[[F; HALF_DIGEST_SIZE]], messages: &[[F; MESSAGE_LEN_FE]]) -> [F; DIGEST_LEN] {
     let n = pubkeys.len();
     assert_eq!(messages.len(), n);
 
@@ -81,7 +81,7 @@ fn build_signer_hints(
     message: &[F; MESSAGE_LEN_FE],
     hints: &mut HashMap<String, Vec<Vec<F>>>,
 ) {
-    let message_digest = poseidon16_compress_pair(message, &make_digest_right(&sig.randomness));
+    let message_digest = hmsg(sig.r, pubkey.pk_seed, pubkey.pk_root, message);
 
     let (leaf_indices, fors_indices, leaf_uppers, fors_uppers) = extract_digest_parts(&message_digest);
 
@@ -97,7 +97,7 @@ fn build_signer_hints(
     hints
         .entry("randomness".to_string())
         .or_default()
-        .push(sig.randomness[..MSG_RANDOMNESS_LEN_FE].to_vec());
+        .push(sig.r.to_vec());
     hints
         .entry("digest_indices".to_string())
         .or_default()
@@ -123,9 +123,6 @@ fn build_signer_hints(
         .or_default()
         .push(sig.hypertree_sig.flatten_hypertree_sig());
 
-    // Suppress unused variable warning — pubkey is passed for API clarity and future use
-    // (e.g. if we need to cross-check pk against the sig's embedded public key).
-    let _ = pubkey;
 }
 
 /// Prove a batch of SPHINCS+ signatures.
@@ -134,7 +131,7 @@ fn build_signer_hints(
 /// Unlike `xmss_aggregate` there are no recursive children and no pubkey deduplication —
 /// the circuit verifies all N (pk, message, sig) triples independently as given.
 pub fn sphincs_aggregate(signers: &[SphincsSignerInput], log_inv_rate: usize) -> AggregatedSPHINCS {
-    let pubkeys: Vec<[F; DIGEST_LEN]> = signers.iter().map(|s| s.pubkey.root()).collect();
+    let pubkeys: Vec<[F; HALF_DIGEST_SIZE]> = signers.iter().map(|s| s.pubkey.root()).collect();
     let messages: Vec<[F; MESSAGE_LEN_FE]> = signers.iter().map(|s| s.message).collect();
 
     let public_input = sphincs_public_input(&pubkeys, &messages).to_vec();
@@ -158,7 +155,7 @@ pub fn sphincs_aggregate(signers: &[SphincsSignerInput], log_inv_rate: usize) ->
 
 /// Verify a SPHINCS+ batch aggregation proof.
 pub fn sphincs_verify_aggregation(
-    pubkeys: &[[F; DIGEST_LEN]],
+    pubkeys: &[[F; HALF_DIGEST_SIZE]],
     messages: &[[F; MESSAGE_LEN_FE]],
     agg: &AggregatedSPHINCS,
 ) -> Result<ProofVerificationDetails, ProofError> {
@@ -175,7 +172,7 @@ pub fn sphincs_verify_aggregation(
 pub fn build_sphincs_witness(signers: &[SphincsSignerInput]) -> ExecutionWitness {
     let n = signers.len();
 
-    let pubkeys: Vec<[F; DIGEST_LEN]> = signers.iter().map(|s| s.pubkey.root()).collect();
+    let pubkeys: Vec<[F; HALF_DIGEST_SIZE]> = signers.iter().map(|s| s.pubkey.root()).collect();
     let pubkeys_flat: Vec<F> = pubkeys.iter().flatten().copied().collect();
     let messages_flat: Vec<F> = signers.iter().flat_map(|s| s.message.iter().copied()).collect();
 
