@@ -16,7 +16,7 @@ MESSAGE_LEN           = 8    # FEs per message
 MSG_RANDOMNESS_LEN_FE = 4    # FEs of per-signature message randomness (prepended to zero-padded right half)
 
 FORS_SIG_SIZE_FE      = SPX_FORS_TREES * (1 + SPX_FORS_HEIGHT) * HALF_DIGEST_LEN   # 576 (half-digests)
-HYPERTREE_SIG_SIZE_FE = SPX_D * (RANDOMNESS_LEN + SPX_WOTS_LEN * HALF_DIGEST_LEN + SPX_TREE_HEIGHT * HALF_DIGEST_LEN)  # 534
+HYPERTREE_SIG_SIZE_FE = SPX_D * (RANDOMNESS_LEN + 2 + SPX_WOTS_LEN * HALF_DIGEST_LEN + SPX_TREE_HEIGHT * HALF_DIGEST_LEN)  # 540
 
 # ADRS type codes — must match address.rs constants
 ADRS_WOTS_HASH  = 0

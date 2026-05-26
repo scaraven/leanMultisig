@@ -49,39 +49,16 @@ def _iterate_hash_const_tweaked(input, k, pk_seed, adrs0, adrs1_start, output):
 
 
 @inline
-def _chain_hash_pair_const(input_left, n, pk_seed, adrs0, kp_adrs1, chain_left, output_left, pair_sum_ptr):
-    # Complete two adjacent WOTS+ chains (chain_left and chain_left+1) given compile-time n.
-    # n = raw_left + raw_right * SPX_WOTS_W; chain_left and n are both compile-time here.
-    #
-    # adrs1 for chain c starting at step s: kp_adrs1 + c*(2**ADRS1_CHAIN_SHIFT) + s*(2**ADRS1_HASH_SHIFT)
-    # kp_adrs1 = kp_addr (chain=0, hash=0 in adrs1 encoding — lower ADRS1_CHAIN_SHIFT bits only)
-    debug_assert(n < SPX_WOTS_W**2)
-
-    raw_left = n % SPX_WOTS_W
-    raw_right = (n - raw_left) / SPX_WOTS_W
-    chain_right = chain_left + 1
-
-    n_left = (SPX_WOTS_W - 1) - raw_left
-    adrs1_left = kp_adrs1 + chain_left * (2 ** ADRS1_CHAIN_SHIFT) + raw_left * (2 ** ADRS1_HASH_SHIFT)
-    _iterate_hash_const_tweaked(input_left, n_left, pk_seed, adrs0, adrs1_left, output_left)
-
-    n_right = (SPX_WOTS_W - 1) - raw_right
-    input_right = input_left + HALF_DIGEST_LEN
-    output_right = output_left + HALF_DIGEST_LEN
-    adrs1_right = kp_adrs1 + chain_right * (2 ** ADRS1_CHAIN_SHIFT) + raw_right * (2 ** ADRS1_HASH_SHIFT)
-    _iterate_hash_const_tweaked(input_right, n_right, pk_seed, adrs0, adrs1_right, output_right)
-
-    pair_sum_ptr[0] = raw_left + raw_right
-    return
-
-
-@inline
-def iterate_hash_pair(input_left, n, pk_seed, adrs0, kp_adrs1, pair_i, output_left, pair_sum_ptr):
-    # Dispatch two adjacent WOTS+ chains (2*pair_i and 2*pair_i+1) via match_range over [0, SPX_WOTS_W²).
-    # pair_i is a compile-time constant (from the unrolled loop in wots_encode_and_complete).
-    # The lambda captures pair_i, so chain_left = 2*pair_i is compile-time inside _chain_hash_pair_const.
-    debug_assert(n < SPX_WOTS_W**2)
-    match_range(n, range(0, SPX_WOTS_W**2), lambda k: _chain_hash_pair_const(input_left, k, pk_seed, adrs0, kp_adrs1, 2 * pair_i, output_left, pair_sum_ptr))
+def iterate_hash_single(input, n, pk_seed, adrs0, kp_adrs1, chain_i, output):
+    # Complete one WOTS+ chain: apply (SPX_WOTS_W - 1 - n) further hash steps.
+    # n = encoding[chain_i] (the raw signing index, already hashed that many times).
+    # chain_i is compile-time (from unroll), so adrs1_start inside the lambda is compile-time.
+    debug_assert(n < SPX_WOTS_W)
+    match_range(n, range(0, SPX_WOTS_W),
+        lambda k: _iterate_hash_const_tweaked(
+            input, (SPX_WOTS_W - 1) - k, pk_seed, adrs0,
+            kp_adrs1 + chain_i * (2 ** ADRS1_CHAIN_SHIFT) + k * (2 ** ADRS1_HASH_SHIFT),
+            output))
     return
 
 
@@ -92,9 +69,9 @@ def wots_encode_and_complete(message, adrs0, adrs1, randomness, chain_tips, pk_s
     # Steps:
     #   1. Assert randomness[RANDOMNESS_LEN] == adrs0 and randomness[RANDOMNESS_LEN+1] == adrs1.
     #      encoding_fe = poseidon(message, randomness)  # right = [r0..r5, adrs0, adrs1]
-    #   2. Decompose encoding_fe into 32 4-bit indices; assert sum == TARGET_SUM.
-    #   3. For each pair i in 0..SPX_WOTS_LEN/2:
-    #      complete both chains via iterate_hash_pair (WOTS_HASH tweak), accumulate pair sums.
+    #   2. Decompose encoding_fe into 32 individual 4-bit indices; assert sum == TARGET_SUM.
+    #   3. For each chain i in 0..SPX_WOTS_LEN:
+    #      complete chain via iterate_hash_single (WOTS_HASH tweak).
     #   4. Fold 32 chain-end HalfDigests into wots_pubkey via fold_wots_pubkey (WOTS_PK tweak).
     #
     # Inputs:
@@ -116,26 +93,31 @@ def wots_encode_and_complete(message, adrs0, adrs1, randomness, chain_tips, pk_s
     encoding_fe = Array(DIGEST_LEN)
     poseidon16_compress(message, randomness, encoding_fe)
 
-    # Step 2: decompose encoding_fe into 16 paired values (each packs two 4-bit indices).
-    encoding = Array(SPX_WOTS_LEN / 2)
+    # Step 2: decompose encoding_fe into 32 individual 4-bit indices (4 chunks per FE).
+    encoding = Array(SPX_WOTS_LEN)
     remaining = Array(DIGEST_LEN)
-    hint_decompose_wots(encoding, remaining, encoding_fe, 2, SPX_WOTS_LOGW * 2)
+    hint_decompose_wots(encoding, remaining, encoding_fe, 4, SPX_WOTS_LOGW)
 
     for i in unroll(0, DIGEST_LEN):
-        assert encoding[2 * i] < SPX_WOTS_W ** 2
-        assert encoding[2 * i + 1] < SPX_WOTS_W ** 2
-        assert encoding_fe[i] == encoding[2 * i] + encoding[2 * i + 1] * SPX_WOTS_W ** 2 + remaining[i] * 2 ** (SPX_WOTS_LOGW * 4)
+        for j in unroll(0, 4):
+            assert encoding[i * 4 + j] < SPX_WOTS_W
+        assert remaining[i] < 2 ** (31 - 4 * SPX_WOTS_LOGW)
+        partial_sum: Mut = remaining[i] * 2 ** (4 * SPX_WOTS_LOGW)
+        for j in unroll(0, 4):
+            partial_sum += encoding[i * 4 + j] * SPX_WOTS_W ** j
+        assert partial_sum == encoding_fe[i]
 
-    # Step 3: complete each chain pair with WOTS_HASH tweak.
+    # Step 3: complete each chain individually with WOTS_HASH tweak.
     # adrs1 passed as kp_adrs1 — contains only kp_addr (chain=0, hash=0).
     chain_ends = Array(SPX_WOTS_LEN * HALF_DIGEST_LEN)
-    pair_sum: Mut = 0
-    for i in unroll(0, SPX_WOTS_LEN / 2):
-        pair_sum_ptr = Array(1)
-        iterate_hash_pair(chain_tips + 2 * i * HALF_DIGEST_LEN, encoding[i], pk_seed, adrs0, adrs1, i, chain_ends + 2 * i * HALF_DIGEST_LEN, pair_sum_ptr)
-        pair_sum += pair_sum_ptr[0]
+    for i in unroll(0, SPX_WOTS_LEN):
+        iterate_hash_single(chain_tips + i * HALF_DIGEST_LEN, encoding[i],
+                            pk_seed, adrs0, adrs1, i, chain_ends + i * HALF_DIGEST_LEN)
 
-    assert pair_sum == TARGET_SUM
+    target_sum: Mut = encoding[0]
+    for i in unroll(1, SPX_WOTS_LEN):
+        target_sum += encoding[i]
+    assert target_sum == TARGET_SUM
 
     # Step 4: fold 32 chain-end HalfDigests into wots_pubkey with WOTS_PK tweak.
     fold_wots_pubkey(pk_seed, wots_pk_adrs0, wots_pk_adrs1, chain_ends, wots_pubkey)

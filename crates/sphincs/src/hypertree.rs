@@ -58,6 +58,8 @@ impl HypertreeSignature {
         let mut out = Vec::new();
         for layer in self.layers.iter() {
             out.extend_from_slice(&layer.wots_sig.randomness);
+            out.push(layer.wots_adrs0);
+            out.push(layer.wots_adrs1);
             out.extend(layer.wots_sig.chain_tips.iter().flatten().copied());
             out.extend(layer.auth_path.iter().flatten().copied());
         }
@@ -68,6 +70,9 @@ impl HypertreeSignature {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HypertreeLayerSig {
     pub wots_sig: WotsSignature,
+    /// adrs0 and adrs1 for the WOTS_HASH address at this layer's signing leaf.
+    pub wots_adrs0: F,
+    pub wots_adrs1: F,
     /// Sibling digests from the leaf level up to (but not including) the root.
     /// Length = SPX_TREE_HEIGHT = 11.
     pub auth_path: Vec<HalfDigest>,
@@ -207,7 +212,7 @@ pub fn hypertree_sign(
             current_message = half_to_full(root);
         }
 
-        HypertreeLayerSig { wots_sig, auth_path }
+        HypertreeLayerSig { wots_sig, wots_adrs0: adrs.adrs0, wots_adrs1: adrs.adrs1, auth_path }
     });
 
     HypertreeSignature { layers }
