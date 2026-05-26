@@ -133,9 +133,10 @@ fn build_layer_tree(
         .into_par_iter()
         .map(|local| {
             let preimages = derive_wots_preimages(sk_seed, pk_seed, layer, tree_address, local);
-            let wots_pk = WotsSecretKey::new(preimages).public_key().clone();
-            let adrs = Adrs::wots_pk(layer as u32, tree_address as u32, local as u32);
-            wots_pk.hash(pk_seed, adrs)
+            let base_adrs = Adrs::wots_hash(layer as u32, tree_address as u32, local as u32, 0, 0);
+            let wots_pk = WotsSecretKey::new(preimages, pk_seed, base_adrs).public_key().clone();
+            let pk_adrs = Adrs::wots_pk(layer as u32, tree_address as u32, local as u32);
+            wots_pk.hash(pk_seed, pk_adrs)
         })
         .collect();
 
@@ -195,11 +196,11 @@ pub fn hypertree_sign(
         let (root, levels) = build_layer_tree(sk.sk_seed, sk.pk_seed, layer, layer_tree_address);
 
         let preimages = derive_wots_preimages(sk.sk_seed, sk.pk_seed, layer, layer_tree_address, layer_leaf_index);
-        let wots_sk = WotsSecretKey::new(preimages);
-
         let adrs = Adrs::wots_hash(layer as u32, layer_tree_address as u32, layer_leaf_index as u32, 0, 0);
+        let wots_sk = WotsSecretKey::new(preimages, sk.pk_seed, adrs);
         let (randomness, _, _) = find_randomness_for_wots_encoding(&current_message, adrs.adrs0, adrs.adrs1, &mut rng);
-        let wots_sig = wots_sk.sign_with_randomness(&current_message, adrs.adrs0, adrs.adrs1, randomness);
+        let wots_sig =
+            wots_sk.sign_with_randomness(&current_message, adrs.adrs0, adrs.adrs1, randomness, sk.pk_seed, adrs);
 
         let auth_path = extract_auth_path(&levels, layer_leaf_index);
 
@@ -229,13 +230,14 @@ pub fn hypertree_verify(
 
         let adrs = Adrs::wots_hash(layer as u32, layer_tree_address as u32, layer_leaf_index as u32, 0, 0);
 
-        let wots_pk = match layer_sig
-            .wots_sig
-            .recover_public_key(&current_message, adrs.adrs0, adrs.adrs1)
-        {
-            Some(pk) => pk,
-            None => return false,
-        };
+        let wots_pk =
+            match layer_sig
+                .wots_sig
+                .recover_public_key(&current_message, adrs.adrs0, adrs.adrs1, pk_seed, adrs)
+            {
+                Some(pk) => pk,
+                None => return false,
+            };
 
         let pk_adrs = Adrs::wots_pk(layer as u32, layer_tree_address as u32, layer_leaf_index as u32);
         let mut current: HalfDigest = wots_pk.hash(pk_seed, pk_adrs);

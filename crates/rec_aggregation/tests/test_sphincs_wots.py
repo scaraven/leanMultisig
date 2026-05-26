@@ -5,27 +5,45 @@ from ..zkdsl_implem.utils import *
 
 def main():
     build_preamble_memory()
+
+    pk_seed = Array(HALF_DIGEST_LEN)
+    hint_witness("pk_seed", pk_seed)
+
     message = Array(DIGEST_LEN)
     hint_witness("message", message)
 
-    layer_index_buf = Array(1)
-    hint_witness("layer_index", layer_index_buf)
-    layer_index = layer_index_buf[0]
+    # adrs0 and adrs1 are compile-time constants supplied by the Rust test harness
+    # via the randomness hint (slots RANDOMNESS_LEN and RANDOMNESS_LEN+1).
+    # The circuit asserts these slots equal the expected compile-time values,
+    # so we read them back from the randomness buffer rather than as separate hints.
+    adrs0_buf = Array(1)
+    hint_witness("adrs0", adrs0_buf)
+    adrs0 = adrs0_buf[0]
 
-    randomness = Array(RANDOMNESS_LEN)
+    adrs1_buf = Array(1)
+    hint_witness("adrs1", adrs1_buf)
+    adrs1 = adrs1_buf[0]
+
+    wots_pk_adrs0_buf = Array(1)
+    hint_witness("wots_pk_adrs0", wots_pk_adrs0_buf)
+    wots_pk_adrs0 = wots_pk_adrs0_buf[0]
+
+    wots_pk_adrs1_buf = Array(1)
+    hint_witness("wots_pk_adrs1", wots_pk_adrs1_buf)
+    wots_pk_adrs1 = wots_pk_adrs1_buf[0]
+
+    # randomness = [r0..r5, adrs0, adrs1] — 8 FEs total
+    randomness = Array(RANDOMNESS_LEN + 2)
     hint_witness("randomness", randomness)
 
-    chain_tips = Array(SPX_WOTS_LEN * DIGEST_LEN)
+    chain_tips = Array(SPX_WOTS_LEN * HALF_DIGEST_LEN)
     hint_witness("chain_tips", chain_tips)
 
-    expected_wots_pubkey = Array(DIGEST_LEN)
+    expected_wots_pubkey = Array(HALF_DIGEST_LEN)
     hint_witness("expected", expected_wots_pubkey)
 
-    local_zero_buf = Array(DIGEST_LEN)
-    set_to_8_zeros(local_zero_buf)
-
-    wots_pubkey = Array(DIGEST_LEN)
-    wots_encode_and_complete(message, layer_index, randomness, chain_tips, local_zero_buf, wots_pubkey)
-    for i in unroll(0, DIGEST_LEN):
+    wots_pubkey = Array(HALF_DIGEST_LEN)
+    wots_encode_and_complete(message, adrs0, adrs1, randomness, chain_tips, pk_seed, wots_pk_adrs0, wots_pk_adrs1, wots_pubkey)
+    for i in unroll(0, HALF_DIGEST_LEN):
         assert wots_pubkey[i] == expected_wots_pubkey[i]
     return

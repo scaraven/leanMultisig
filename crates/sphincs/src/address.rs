@@ -137,6 +137,40 @@ impl Adrs {
         }
     }
 
+    /// Return a copy with chain_address set to `chain` and hash_address zeroed.
+    /// Only valid for WOTS_HASH / WOTS_PRF adrs (WOTS layout for adrs1).
+    pub fn with_chain(self, chain: u32) -> Self {
+        debug_assert!(chain <= MAX_CHAIN, "chain out of range");
+        let kp_addr = self.adrs1.as_canonical_u32() & ((1 << ADRS1_CHAIN_SHIFT) - 1);
+        Self {
+            adrs0: self.adrs0,
+            adrs1: F::new(kp_addr | (chain << ADRS1_CHAIN_SHIFT)),
+        }
+    }
+
+    /// Return a copy with hash_address incremented by one.
+    /// Only valid for WOTS_HASH adrs (WOTS layout for adrs1).
+    pub fn next_hash_step(self) -> Self {
+        let raw = self.adrs1.as_canonical_u32();
+        let hash = (raw >> ADRS1_HASH_SHIFT) + 1;
+        debug_assert!(hash <= MAX_HASH, "hash_address overflow");
+        Self {
+            adrs0: self.adrs0,
+            adrs1: F::new((raw & ((1 << ADRS1_HASH_SHIFT) - 1)) | (hash << ADRS1_HASH_SHIFT)),
+        }
+    }
+
+    /// Return a copy with hash_address set to `hash`.
+    /// Only valid for WOTS_HASH adrs (WOTS layout for adrs1).
+    pub fn with_hash_step(self, hash: u32) -> Self {
+        debug_assert!(hash <= MAX_HASH, "hash_address out of range");
+        let raw = self.adrs1.as_canonical_u32();
+        Self {
+            adrs0: self.adrs0,
+            adrs1: F::new((raw & ((1 << ADRS1_HASH_SHIFT) - 1)) | (hash << ADRS1_HASH_SHIFT)),
+        }
+    }
+
     /// Mirror of ADRS.setTypeAndClear from FIPS 205: change the type field in adrs0 and zero adrs1.
     pub fn set_type_and_clear(&mut self, adrs_type: u32) {
         debug_assert!(adrs_type <= MAX_TYPE);
@@ -261,6 +295,35 @@ mod tests {
         assert_eq!(t, WOTS_HASH);
         assert_eq!(tr, 0x1234);
         assert_eq!(adrs.adrs1.as_canonical_u32(), 0);
+    }
+
+    #[test]
+    fn test_with_chain() {
+        let base = Adrs::wots_hash(1, 0x10, 0x5, 0, 0);
+        let chained = base.with_chain(7);
+        // adrs0 unchanged
+        assert_eq!(chained.adrs0, base.adrs0);
+        // kp_addr preserved, chain=7, hash=0
+        let raw = chained.adrs1.as_canonical_u32();
+        assert_eq!(raw & MAX_KP_ADDR, 0x5);
+        assert_eq!((raw >> ADRS1_CHAIN_SHIFT) & MAX_CHAIN, 7);
+        assert_eq!((raw >> ADRS1_HASH_SHIFT) & MAX_HASH, 0);
+    }
+
+    #[test]
+    fn test_next_hash_step() {
+        let base = Adrs::wots_hash(0, 0, 0x3, 5, 0);
+        let stepped = base.next_hash_step();
+        assert_eq!(stepped.adrs0, base.adrs0);
+        let raw = stepped.adrs1.as_canonical_u32();
+        assert_eq!((raw >> ADRS1_CHAIN_SHIFT) & MAX_CHAIN, 5);
+        assert_eq!((raw >> ADRS1_HASH_SHIFT) & ((1 << SPX_HASH_ADDR_BITS) - 1), 1);
+        // step twice more
+        let stepped2 = stepped.next_hash_step().next_hash_step();
+        assert_eq!(
+            (stepped2.adrs1.as_canonical_u32() >> ADRS1_HASH_SHIFT) & ((1 << SPX_HASH_ADDR_BITS) - 1),
+            3
+        );
     }
 
     #[test]

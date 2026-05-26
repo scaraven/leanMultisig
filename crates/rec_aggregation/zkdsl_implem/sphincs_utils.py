@@ -129,74 +129,38 @@ def do_5_merkle_level_const(k, state_in, sibling, state_out):
     return
 
 @inline
-def _iterate_hash_const(input, k, output, local_zero_buf):
-    if k == 0:
-        copy_8(input, output)
-    elif k == 1:
-        poseidon16_compress(input, local_zero_buf, output)
-    else:
-        states = Array((k - 1) * DIGEST_LEN)
-        poseidon16_compress(input, local_zero_buf, states)
-        for i in unroll(1, k - 1):
-            poseidon16_compress(states + (i - 1) * DIGEST_LEN, local_zero_buf, states + i * DIGEST_LEN)
-        poseidon16_compress(states + (k - 2) * DIGEST_LEN, local_zero_buf, output)
-    return
-
-
-@inline
-def _chain_hash_pair_const(input_left, n, output_left, pair_sum_ptr, local_zero_buf):
-    # Complete two WOTS+ chains simultaneously given a compile-time joint index n.
-    #
-    # n encodes a pair of encoding values (raw_left, raw_right) as:
-    #   n = raw_left + raw_right * SPX_WOTS_W,  n ∈ [0, SPX_WOTS_W²)
-    #
-    # Each chain is completed with (SPX_WOTS_W - 1 - raw_x) further hash iterations.
-    # pair_sum_ptr[0] is set to raw_left + raw_right for target-sum accumulation.
-    debug_assert(n < SPX_WOTS_W**2)
-
-    raw_left = n % SPX_WOTS_W
-    raw_right = (n - raw_left) / SPX_WOTS_W
-
-    n_left = (SPX_WOTS_W - 1) - raw_left
-    _iterate_hash_const(input_left, n_left, output_left, local_zero_buf)
-
-    n_right = (SPX_WOTS_W - 1) - raw_right
-    input_right = input_left + DIGEST_LEN
-    output_right = output_left + DIGEST_LEN
-    _iterate_hash_const(input_right, n_right, output_right, local_zero_buf)
-
-    pair_sum_ptr[0] = raw_left + raw_right
-    return
-
-
-@inline
-def iterate_hash_pair(input_left, n, output_left, pair_sum_ptr, local_zero_buf):
-    # Dispatch two adjacent WOTS+ chains via a single match_range over [0, SPX_WOTS_W²).
-    #
-    # n = encoding[2*i] + encoding[2*i+1] * SPX_WOTS_W
-    # Precondition: n < SPX_WOTS_W² (implied by encoding[i] < SPX_WOTS_W for both components)
-    debug_assert(n < SPX_WOTS_W**2)
-    match_range(n, range(0, SPX_WOTS_W**2), lambda k: _chain_hash_pair_const(input_left, k, output_left, pair_sum_ptr, local_zero_buf))
-    return
-
-@inline
-def fold_wots_pubkey(chain_pub_keys, out):
+def fold_wots_pubkey(pk_seed, adrs0, adrs1, chain_pub_keys, out):
     # Fold SPX_WOTS_LEN (32) completed chain tips into a single WOTS+ public key digest.
-    # Matches WotsPublicKey::hash() in wots.rs:77-82.
-    # Sequential left-fold:
-    #   init = poseidon(chain_pub_keys[0], chain_pub_keys[1])
-    #   for i in 2..32: acc = poseidon(acc, chain_pub_keys[i])
-    # Costs 31 Poseidon calls.
+    # Matches WotsPublicKey::hash() in wots.rs — tweaked left-fold:
+    #   left  = [pk_seed[0..4] | adrs0, adrs1, 0, 0]   (constant across all steps)
+    #   right = [acc[0..4] | next_tip[0..4]]
+    # adrs0/adrs1 encode Adrs::wots_pk(layer, tree_addr, kp_addr) — compile-time constants at all call sites.
+    # Costs 31 adrs_compress calls.
     #
-    # Input:
-    #   chain_pub_keys — SPX_WOTS_LEN * DIGEST_LEN FEs: completed chain-end hashes
+    # Inputs:
+    #   pk_seed        — pointer to HALF_DIGEST_LEN (4) FEs: per-signer public seed
+    #   adrs0          — scalar: packed layer/type/tree_address (WOTS_PK type)
+    #   adrs1          — scalar: kp_addr (chain=0, hash=0)
+    #   chain_pub_keys — SPX_WOTS_LEN * HALF_DIGEST_LEN FEs: completed chain-end HalfDigests
     # Output:
-    #   out — DIGEST_LEN FEs: folded public key hash
-    states = Array((SPX_WOTS_LEN - 2) * DIGEST_LEN)
-    poseidon16_compress(chain_pub_keys, chain_pub_keys + DIGEST_LEN, states)
+    #   out — HALF_DIGEST_LEN (4) FEs: folded WOTS+ public key hash
+    states = Array((SPX_WOTS_LEN - 2) * HALF_DIGEST_LEN)
+
+    right0 = Array(DIGEST_LEN)
+    copy_4(chain_pub_keys, right0)
+    copy_4(chain_pub_keys + HALF_DIGEST_LEN, right0 + HALF_DIGEST_LEN)
+    adrs_compress(pk_seed, adrs0, adrs1, right0, states)
+
     for i in unroll(1, SPX_WOTS_LEN - 2):
-        poseidon16_compress(states + (i - 1) * DIGEST_LEN, chain_pub_keys + (i + 1) * DIGEST_LEN, states + i * DIGEST_LEN)
-    poseidon16_compress(states + (SPX_WOTS_LEN - 3) * DIGEST_LEN, chain_pub_keys + (SPX_WOTS_LEN - 1) * DIGEST_LEN, out)
+        right_i = Array(DIGEST_LEN)
+        copy_4(states + (i - 1) * HALF_DIGEST_LEN, right_i)
+        copy_4(chain_pub_keys + (i + 1) * HALF_DIGEST_LEN, right_i + HALF_DIGEST_LEN)
+        adrs_compress(pk_seed, adrs0, adrs1, right_i, states + i * HALF_DIGEST_LEN)
+
+    right_last = Array(DIGEST_LEN)
+    copy_4(states + (SPX_WOTS_LEN - 3) * HALF_DIGEST_LEN, right_last)
+    copy_4(chain_pub_keys + (SPX_WOTS_LEN - 1) * HALF_DIGEST_LEN, right_last + HALF_DIGEST_LEN)
+    adrs_compress(pk_seed, adrs0, adrs1, right_last, out)
     return
 
 @inline

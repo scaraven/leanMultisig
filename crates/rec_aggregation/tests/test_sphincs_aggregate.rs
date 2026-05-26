@@ -4,13 +4,12 @@ use lean_vm::*;
 use rand::{RngExt, SeedableRng, rngs::StdRng};
 use rec_aggregation::{PREAMBLE_MEMORY_LEN, compilation::build_replacements, sphincs::split_leaf_upper};
 use sphincs::{
-    HALF_DIGEST_SIZE, HalfDigest, MESSAGE_LEN_FE, MSG_RANDOMNESS_LEN_FE, RANDOMNESS_LEN_FE, SPX_D,
-    SPX_TREE_BITS, SPX_TREE_HEIGHT, SPX_WOTS_LEN,
+    HALF_DIGEST_SIZE, HalfDigest, HypertreeSecretKey, HypertreeSignature, MESSAGE_LEN_FE, MSG_RANDOMNESS_LEN_FE,
+    RANDOMNESS_LEN_FE, SPX_D, SPX_TREE_BITS, SPX_TREE_HEIGHT, SPX_WOTS_LEN,
     address::Adrs,
     core::{SphincsSecretKey, extract_digest_parts, hmsg},
     fors_sig_to_flat, hypertree_sign,
     wots::{half_to_full, truncate_half},
-    HypertreeSecretKey, HypertreeSignature,
 };
 use std::collections::HashMap;
 use utils::poseidon16_compress_pair;
@@ -68,7 +67,12 @@ fn compute_merkle_root(
     for (level, sibling) in auth_path.iter().enumerate() {
         let is_left = ((leaf_index >> level) & 1) == 0;
         let node_idx = (leaf_index >> level) >> 1;
-        let adrs = Adrs::tree(layer as u32, layer_tree_address as u32, (level + 1) as u32, node_idx as u32);
+        let adrs = Adrs::tree(
+            layer as u32,
+            layer_tree_address as u32,
+            (level + 1) as u32,
+            node_idx as u32,
+        );
         let mut left = [F::ZERO; DIGEST_LEN];
         left[..HALF_DIGEST_SIZE].copy_from_slice(&pk_seed);
         left[HALF_DIGEST_SIZE] = adrs.adrs0;
@@ -203,19 +207,12 @@ fn test_hypertree_merkle_verify() {
         let wots_adrs = Adrs::wots_hash(0, layer_tree_address as u32, leaf_idx as u32, 0, 0);
         let wots_pk = layer0
             .wots_sig
-            .recover_public_key(&current_message, wots_adrs.adrs0, wots_adrs.adrs1)
+            .recover_public_key(&current_message, wots_adrs.adrs0, wots_adrs.adrs1, pk_seed, wots_adrs)
             .expect("valid layer-0 WOTS signature");
         let pk_adrs = Adrs::wots_pk(0, layer_tree_address as u32, leaf_idx as u32);
         let leaf_node = wots_pk.hash(pk_seed, pk_adrs);
 
-        let expected_root = compute_merkle_root(
-            leaf_node,
-            leaf_idx,
-            &layer0.auth_path,
-            pk_seed,
-            0,
-            layer_tree_address,
-        );
+        let expected_root = compute_merkle_root(leaf_node, leaf_idx, &layer0.auth_path, pk_seed, 0, layer_tree_address);
 
         let hints = HashMap::from([
             ("layer_leaf_index".to_string(), vec![vec![F::from_usize(leaf_idx)]]),

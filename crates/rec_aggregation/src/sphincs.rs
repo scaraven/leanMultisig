@@ -11,7 +11,7 @@ use sphincs::{
     fors_sig_to_flat,
 };
 use std::collections::HashMap;
-use utils::{poseidon16_compress_pair, poseidon_compress_slice};
+use utils::{poseidon_compress_slice, poseidon16_compress_pair};
 
 use crate::PREAMBLE_MEMORY_LEN;
 
@@ -94,10 +94,7 @@ fn build_signer_hints(
 
     let digest_fors_uppers: Vec<F> = fors_uppers.iter().map(|&u| F::from_usize(u)).collect();
 
-    hints
-        .entry("randomness".to_string())
-        .or_default()
-        .push(sig.r.to_vec());
+    hints.entry("randomness".to_string()).or_default().push(sig.r.to_vec());
     hints
         .entry("digest_indices".to_string())
         .or_default()
@@ -122,7 +119,6 @@ fn build_signer_hints(
         .entry("hypertree_sig".to_string())
         .or_default()
         .push(sig.hypertree_sig.flatten_hypertree_sig());
-
 }
 
 /// Prove a batch of SPHINCS+ signatures.
