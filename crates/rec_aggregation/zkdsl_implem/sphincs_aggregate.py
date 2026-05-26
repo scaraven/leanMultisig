@@ -82,34 +82,51 @@ def sphincs_verify(pk, message):
     # Top-level SPHINCS+ signature verifier.
     #
     # Steps:
-    #   1. Hash the MESSAGE_LEN (8)-FE message to an 8-FE message digest:
-    #        message_digest = poseidon(message, ZERO_VEC)   (1 Poseidon call)
-    #   2. Decompose the digest once via decompose_message_digest to obtain
-    #      fors_indices[9] and layer_leaf_indices[3].
-    #   3. Verify FORS: fors_pubkey = fors_verify(fors_indices).
-    #   4. Verify hypertree: hypertree_verify(fors_pubkey,
-    #                                         layer_leaf_indices, pk).
+    #   1. Compute message digest via hmsg(r, pk_seed, pk_root, message) — two Poseidon calls:
+    #        call1: left=[r[0..4] | pk_seed[0..4]], right=[pk_root[0..4] | message[0..4]]
+    #        call2: left=[call1_out[0..4] | 0,0,0,0], right=[message[4..8] | 0,0,0,0]
+    #   2. Decompose the digest via decompose_message_digest to obtain
+    #      layer_leaf_indices[3] and fors_indices[9].
+    #   3. Verify FORS: fors_pk = fors_verify(pk_seed, fors_indices).
+    #   4. Verify hypertree: hypertree_verify(pk_seed, fors_pk, layer_leaf_indices, pk_root).
     #
     # Inputs:
-    #   pk            — DIGEST_LEN FEs: signer's SPHINCS+ public key
-    #   message       — MESSAGE_LEN (8) FEs: shared message
-    #
-    # Postcondition:
-    #   Asserts the signature is valid for (pk, message).
-    #   Fails the circuit if any sub-verification does not hold.
+    #   pk      — DIGEST_LEN (8) FEs: [pk_seed(4) | pk_root(4)]
+    #   message — MESSAGE_LEN (8) FEs
     randomness_arr = Array(MSG_RANDOMNESS_LEN_FE)
     hint_witness("randomness", randomness_arr)
-    right_half = Array(DIGEST_LEN)
-    for k in unroll(0, MSG_RANDOMNESS_LEN_FE):
-        right_half[k] = randomness_arr[k]
-    set_to_4_zeros(right_half + MSG_RANDOMNESS_LEN_FE)
+
+    pk_seed = pk
+    pk_root = pk + HALF_DIGEST_LEN
+
+    left1 = Array(DIGEST_LEN)
+    copy_4(randomness_arr, left1)
+    copy_4(pk_seed, left1 + HALF_DIGEST_LEN)
+
+    right1 = Array(DIGEST_LEN)
+    copy_4(pk_root, right1)
+    for k in unroll(0, HALF_DIGEST_LEN):
+        right1[HALF_DIGEST_LEN + k] = message[k]
+
+    mid = Array(DIGEST_LEN)
+    poseidon16_compress(left1, right1, mid)
+
+    left2 = Array(DIGEST_LEN)
+    copy_4(mid, left2)
+    set_to_4_zeros(left2 + HALF_DIGEST_LEN)
+
+    right2 = Array(DIGEST_LEN)
+    for k in unroll(0, HALF_DIGEST_LEN):
+        right2[k] = message[HALF_DIGEST_LEN + k]
+    set_to_4_zeros(right2 + HALF_DIGEST_LEN)
 
     message_digest = Array(DIGEST_LEN)
-    poseidon16_compress(message, right_half, message_digest)
+    poseidon16_compress(left2, right2, message_digest)
 
     indices = decompose_message_digest(message_digest)
-    
-    fors_pk = Array(DIGEST_LEN)
-    fors_verify(indices + SPX_D, fors_pk)
-    hypertree_verify(fors_pk, indices, pk)
+
+    fors_pk = Array(HALF_DIGEST_LEN)
+    fors_verify(pk_seed, indices + SPX_D, fors_pk)
+
+    hypertree_verify(pk_seed, fors_pk, indices, pk_root)
     return

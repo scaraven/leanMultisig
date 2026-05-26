@@ -95,14 +95,18 @@ fn build_sphincs_hints(seed: [u8; 20], message: [F; MESSAGE_LEN_FE]) -> HashMap<
     let sk = SphincsSecretKey::new(sk_seed, sk_prf);
     let pk_root = sk.pk_root;
     let pk_seed = sk.pk_seed;
-    let pk = pk_root; // HalfDigest (4 FEs)
-
     let sig = sk.sign(&message).expect("failed to sign message");
 
     // sig.r is the 4-FE HalfDigest message randomness R = PRFmsg(sk_prf, opt_rand, message)
     let message_digest = hmsg(sig.r, pk_seed, pk_root, &message);
 
     let (leaf_indices, fors_indices, leaf_uppers, fors_uppers) = extract_digest_parts(&message_digest);
+
+    // Reconstruct leaf_idx and tree_address to hint layer_tree_addresses for hypertree_verify.
+    let tree_address = leaf_indices[1] | (leaf_indices[2] << SPX_TREE_HEIGHT);
+    let layer_tree_addresses: Vec<F> = (0..SPX_D)
+        .map(|l| F::from_usize(tree_address >> (l * SPX_TREE_HEIGHT)))
+        .collect();
 
     let digest_indices: Vec<F> = leaf_indices
         .iter()
@@ -117,14 +121,17 @@ fn build_sphincs_hints(seed: [u8; 20], message: [F; MESSAGE_LEN_FE]) -> HashMap<
     let fors_sig_flat = fors_sig_to_flat(&sig.fors_sig);
     let hypertree_sig_flat = sig.hypertree_sig.flatten_hypertree_sig();
 
-    // Per layer: randomness(RANDOMNESS_LEN_FE) + layer_idx(1) + chain_tips(SPX_WOTS_LEN*HALF_DIGEST_SIZE)
+    // Per layer: randomness_with_adrs(RANDOMNESS_LEN_FE+2) + chain_tips(SPX_WOTS_LEN*HALF_DIGEST_SIZE)
     //            + auth_path(SPX_TREE_HEIGHT*HALF_DIGEST_SIZE)
     let expected_hypertree_len =
-        SPX_D * ((RANDOMNESS_LEN_FE + 1) + (SPX_WOTS_LEN + SPX_TREE_HEIGHT) * HALF_DIGEST_SIZE);
+        SPX_D * ((RANDOMNESS_LEN_FE + 2) + (SPX_WOTS_LEN + SPX_TREE_HEIGHT) * HALF_DIGEST_SIZE);
     assert_eq!(hypertree_sig_flat.len(), expected_hypertree_len);
 
+    // pk hint: [pk_seed(4) | pk_root(4)] — 8 FEs total, matching DIGEST_LEN in the circuit.
+    let pk_full: Vec<F> = pk_seed.iter().chain(pk_root.iter()).copied().collect();
+
     HashMap::from([
-        ("pk".to_string(), vec![pk.to_vec()]),
+        ("pk".to_string(), vec![pk_full]),
         ("message".to_string(), vec![message.to_vec()]),
         (
             "randomness".to_string(),
@@ -137,6 +144,7 @@ fn build_sphincs_hints(seed: [u8; 20], message: [F; MESSAGE_LEN_FE]) -> HashMap<
         ("digest_uppers_fors".to_string(), vec![digest_fors_uppers]),
         ("fors_sig".to_string(), vec![fors_sig_flat]),
         ("hypertree_sig".to_string(), vec![hypertree_sig_flat]),
+        ("layer_tree_addresses".to_string(), vec![layer_tree_addresses]),
     ])
 }
 
@@ -198,8 +206,8 @@ fn test_hypertree_merkle_verify() {
         let sk = HypertreeSecretKey::new(sk_seed, pk_seed);
         let sig = hypertree_sign(&sk, &fors_pk_digest, leaf_idx, tree_address);
 
-        // Layer-0 message: poseidon(fors_pk_digest, zeros)
-        let current_message = poseidon16_compress_pair(&fors_pk_digest, &[F::ZERO; DIGEST_LEN]);
+        // Layer-0 message is fors_pk_digest directly (half_to_full(fors_pk_half)).
+        let current_message = fors_pk_digest;
         let layer0 = &sig.layers[0];
         let layer_tree_address = tree_address; // layer 0: no shift
 
@@ -215,6 +223,8 @@ fn test_hypertree_merkle_verify() {
         let expected_root = compute_merkle_root(leaf_node, leaf_idx, &layer0.auth_path, pk_seed, 0, layer_tree_address);
 
         let hints = HashMap::from([
+            ("pk_seed".to_string(), vec![pk_seed.to_vec()]),
+            ("tree_adrs0".to_string(), vec![vec![Adrs::tree(0, layer_tree_address as u32, 0, 0).adrs0]]),
             ("layer_leaf_index".to_string(), vec![vec![F::from_usize(leaf_idx)]]),
             ("leaf_node".to_string(), vec![leaf_node.to_vec()]),
             (
@@ -251,16 +261,25 @@ fn test_hypertree_verify() {
 
         let layer_leaf_indices = compute_layer_leaf_indices(leaf_idx, tree_address);
 
-        // fors_pubkey hint: 4-FE HalfDigest (the circuit will hash it with zeros to get layer-0 message)
-        let hints = HashMap::from([
-            ("fors_pubkey".to_string(), vec![fors_pk_half.to_vec()]),
-            (
-                "layer_leaf_indices".to_string(),
-                vec![layer_leaf_indices.iter().map(|&i| F::from_usize(i)).collect()],
-            ),
-            ("expected_pk".to_string(), vec![pk.to_vec()]),
-            ("hypertree_sig".to_string(), vec![sig.flatten_hypertree_sig()]),
-        ]);
+        let layer_tree_addresses: Vec<F> = (0..SPX_D)
+            .map(|l| F::from_usize(tree_address >> (l * SPX_TREE_HEIGHT)))
+            .collect();
+
+        let make_hints = |expected: HalfDigest| {
+            HashMap::from([
+                ("pk_seed".to_string(), vec![pk_seed.to_vec()]),
+                ("fors_pubkey".to_string(), vec![fors_pk_half.to_vec()]),
+                (
+                    "layer_leaf_indices".to_string(),
+                    vec![layer_leaf_indices.iter().map(|&i| F::from_usize(i)).collect()],
+                ),
+                ("expected_pk".to_string(), vec![expected.to_vec()]),
+                ("hypertree_sig".to_string(), vec![sig.flatten_hypertree_sig()]),
+                ("layer_tree_addresses".to_string(), vec![layer_tree_addresses.clone()]),
+            ])
+        };
+
+        let hints = make_hints(pk);
 
         let witness = ExecutionWitness {
             preamble_memory_len: PREAMBLE_MEMORY_LEN,
@@ -270,15 +289,7 @@ fn test_hypertree_verify() {
 
         let mut wrong_pk = pk;
         wrong_pk[0] += F::ONE;
-        let wrong_hints = HashMap::from([
-            ("fors_pubkey".to_string(), vec![fors_pk_half.to_vec()]),
-            (
-                "layer_leaf_indices".to_string(),
-                vec![layer_leaf_indices.iter().map(|&i| F::from_usize(i)).collect()],
-            ),
-            ("expected_pk".to_string(), vec![wrong_pk.to_vec()]),
-            ("hypertree_sig".to_string(), vec![sig.flatten_hypertree_sig()]),
-        ]);
+        let wrong_hints = make_hints(wrong_pk);
         let wrong_witness = ExecutionWitness {
             preamble_memory_len: PREAMBLE_MEMORY_LEN,
             hints: wrong_hints,
