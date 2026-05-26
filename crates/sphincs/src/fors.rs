@@ -58,7 +58,7 @@ fn derive_leaf_secret(sk_seed: HalfDigest, pk_seed: HalfDigest, tree_index: usiz
 }
 
 /// Hash a leaf secret into the level-0 tree node, tweaked with Adrs::fors_tree(height=0).
-fn hash_leaf(secret: HalfDigest, pk_seed: HalfDigest, tree_index: usize, leaf_index: usize) -> HalfDigest {
+pub fn hash_leaf(secret: HalfDigest, pk_seed: HalfDigest, tree_index: usize, leaf_index: usize) -> HalfDigest {
     let adrs = Adrs::fors_tree(tree_index as u32, 0, leaf_index as u32);
     let mut left = [F::ZERO; DIGEST_SIZE];
     left[..4].copy_from_slice(&pk_seed);

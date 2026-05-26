@@ -115,9 +115,10 @@ pub enum CustomHint {
     DecomposeBitsLittle,
     LessThan,
     Log2Ceil,
+    ForsNodeAdrs,
 }
 
-pub const CUSTOM_HINTS: [CustomHint; 8] = [
+pub const CUSTOM_HINTS: [CustomHint; 9] = [
     CustomHint::DecomposeWots,
     CustomHint::DecomposeBitsFors,
     CustomHint::DecomposeBitsXMSS,
@@ -126,6 +127,7 @@ pub const CUSTOM_HINTS: [CustomHint; 8] = [
     CustomHint::DecomposeBitsLittle,
     CustomHint::LessThan,
     CustomHint::Log2Ceil,
+    CustomHint::ForsNodeAdrs,
 ];
 
 impl CustomHint {
@@ -139,6 +141,7 @@ impl CustomHint {
             Self::DecomposeBitsLittle => "hint_decompose_bits_little",
             Self::LessThan => "hint_less_than",
             Self::Log2Ceil => "hint_log2_ceil",
+            Self::ForsNodeAdrs => "hint_fors_node_adrs",
         }
     }
 
@@ -152,6 +155,7 @@ impl CustomHint {
             Self::DecomposeBitsLittle => 3,
             Self::LessThan => 3,
             Self::Log2Ceil => 2,
+            Self::ForsNodeAdrs => 4,
         }
     }
 
@@ -260,6 +264,32 @@ impl CustomHint {
                 let n = args[0].read_value(ctx.memory, ctx.fp)?.to_usize();
                 let res_ptr = args[1].memory_address(ctx.fp)?;
                 ctx.memory.set(res_ptr, F::from_usize(log2_ceil_usize(n)))?;
+            }
+            Self::ForsNodeAdrs => {
+                // hint_fors_node_adrs(adrs1_ptr, rem_ptr, leaf_index, tree_ht_start)
+                //
+                // Fills MERKLE_LEVEL_STEP slots starting at adrs1_ptr with the packed adrs1
+                // values for heights tree_ht_start+1 .. tree_ht_start+MERKLE_LEVEL_STEP, and
+                // MERKLE_LEVEL_STEP slots starting at rem_ptr with the corresponding remainders.
+                //
+                // For each h in 0..MERKLE_LEVEL_STEP, absolute height H = tree_ht_start + h + 1:
+                //   adrs1[h] = (leaf_index >> H) | (H << SPX_FORS_HEIGHT)
+                //   rem[h]   = leaf_index % (1 << H)
+                let adrs1_ptr = args[0].read_value(ctx.memory, ctx.fp)?.to_usize();
+                let rem_ptr = args[1].read_value(ctx.memory, ctx.fp)?.to_usize();
+                let leaf_index = args[2].read_value(ctx.memory, ctx.fp)?.to_usize();
+                let tree_ht_start = args[3].read_value(ctx.memory, ctx.fp)?.to_usize();
+                // SPHINCS+ parameters: SPX_FORS_HEIGHT=15, MERKLE_LEVEL_STEP=5
+                const SPX_FORS_HEIGHT: usize = 15;
+                const MERKLE_LEVEL_STEP: usize = 5;
+                for h in 0..MERKLE_LEVEL_STEP {
+                    let abs_height = tree_ht_start + h + 1;
+                    let node_index = leaf_index >> abs_height;
+                    let adrs1 = node_index | (abs_height << SPX_FORS_HEIGHT);
+                    let rem = leaf_index % (1 << abs_height);
+                    ctx.memory.set(adrs1_ptr + h, F::from_usize(adrs1))?;
+                    ctx.memory.set(rem_ptr + h, F::from_usize(rem))?;
+                }
             }
         }
         Ok(())

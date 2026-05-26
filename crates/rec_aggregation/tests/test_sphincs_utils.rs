@@ -282,8 +282,10 @@ fn test_sphincs_fors_merkle_verify() {
         let sig = fors_sign_single_tree(&fors_sk, tree, leaf_index);
 
         let hints = HashMap::from([
+            ("pk_seed".to_string(), vec![pk_seed.to_vec()]),
+            ("tree_index".to_string(), vec![vec![F::from_usize(tree)]]),
             ("leaf_index".to_string(), vec![vec![F::from_usize(leaf_index)]]),
-            ("leaf_node".to_string(), vec![sig.leaf_secret.to_vec()]),
+            ("leaf_secret".to_string(), vec![sig.leaf_secret.to_vec()]),
             (
                 "auth_path".to_string(),
                 vec![sig.auth_path.iter().flatten().copied().collect()],
@@ -315,6 +317,7 @@ fn test_sphincs_fors_verify() {
         let sig_flat = fors_sig_to_flat(&sig);
 
         let hints = HashMap::from([
+            ("pk_seed".to_string(), vec![pk_seed.to_vec()]),
             (
                 "leaf_index".to_string(),
                 vec![leaf_indices.iter().map(|&idx| F::from_usize(idx)).collect()],
@@ -333,6 +336,7 @@ fn test_sphincs_fors_verify() {
         // Wrong root: random HalfDigest (4 FEs)
         let root_wrong: HalfDigest = rng.random();
         let hints_wrong = HashMap::from([
+            ("pk_seed".to_string(), vec![pk_seed.to_vec()]),
             (
                 "leaf_index".to_string(),
                 vec![leaf_indices.iter().map(|&idx| F::from_usize(idx)).collect()],
