@@ -657,7 +657,7 @@ pub fn run_sphincs_benchmark(n_sigs: usize, log_inv_rate: usize, tracing: bool) 
         );
     }
 
-    let pubkeys: Vec<_> = signers.iter().map(|s| s.pubkey.root()).collect();
+    let pubkeys: Vec<_> = signers.iter().map(|s| crate::sphincs::sphincs_full_pubkey(&s.pubkey)).collect();
     let messages: Vec<_> = signers.iter().map(|s| s.message).collect();
     sphincs_verify_aggregation(&pubkeys, &messages, &agg).unwrap();
 

@@ -4,7 +4,7 @@ use lean_prover::prove_execution::prove_execution;
 use lean_prover::verify_execution::{ProofVerificationDetails, verify_execution};
 use lean_vm::{DIGEST_LEN, ExecutionMetadata, ExecutionWitness, F};
 use serde::{Deserialize, Serialize};
-use sphincs::SPX_TREE_HEIGHT;
+use sphincs::{SPX_D, SPX_TREE_HEIGHT};
 use sphincs::{
     HALF_DIGEST_SIZE, MESSAGE_LEN_FE,
     core::{SphincsPublicKey, SphincsSig, extract_digest_parts, hmsg},
@@ -52,10 +52,10 @@ pub struct AggregatedSPHINCS {
 ///
 /// Mirrors the Python commitment scheme in main_sphincs.py:
 ///   seg_nsigs    = poseidon(ZERO_VEC, [n_sigs, 0, ..., 0])
-///   seg_pubkeys  = slice_hash_with_iv(pubkeys_flat)
+///   seg_pubkeys  = slice_hash_with_iv(pubkeys_flat)   # pubkeys are DIGEST_LEN (8 FEs) each: [pk_seed | pk_root]
 ///   seg_messages = slice_hash_with_iv(messages_flat)
 ///   commitment   = poseidon(poseidon(seg_nsigs, seg_pubkeys), seg_messages)
-pub fn sphincs_public_input(pubkeys: &[[F; HALF_DIGEST_SIZE]], messages: &[[F; MESSAGE_LEN_FE]]) -> [F; DIGEST_LEN] {
+pub fn sphincs_public_input(pubkeys: &[[F; DIGEST_LEN]], messages: &[[F; MESSAGE_LEN_FE]]) -> [F; DIGEST_LEN] {
     let n = pubkeys.len();
     assert_eq!(messages.len(), n);
 
@@ -71,6 +71,14 @@ pub fn sphincs_public_input(pubkeys: &[[F; HALF_DIGEST_SIZE]], messages: &[[F; M
 
     let h01 = poseidon16_compress_pair(&seg_nsigs, &seg_pubkeys);
     poseidon16_compress_pair(&h01, &seg_messages)
+}
+
+/// Build the full 8-FE public key `[pk_seed | pk_root]` from a `SphincsPublicKey`.
+pub fn sphincs_full_pubkey(pk: &SphincsPublicKey) -> [F; DIGEST_LEN] {
+    let mut out = [F::ZERO; DIGEST_LEN];
+    out[..HALF_DIGEST_SIZE].copy_from_slice(&pk.pk_seed);
+    out[HALF_DIGEST_SIZE..].copy_from_slice(&pk.pk_root);
+    out
 }
 
 /// Append per-signer hints derived from a pre-computed signature.
@@ -119,6 +127,15 @@ fn build_signer_hints(
         .entry("hypertree_sig".to_string())
         .or_default()
         .push(sig.hypertree_sig.flatten_hypertree_sig());
+
+    let tree_address = leaf_indices[1] | (leaf_indices[2] << SPX_TREE_HEIGHT);
+    let layer_tree_addresses: Vec<F> = (0..SPX_D)
+        .map(|l| F::from_usize(tree_address >> (l * SPX_TREE_HEIGHT)))
+        .collect();
+    hints
+        .entry("layer_tree_addresses".to_string())
+        .or_default()
+        .push(layer_tree_addresses);
 }
 
 /// Prove a batch of SPHINCS+ signatures.
@@ -127,7 +144,7 @@ fn build_signer_hints(
 /// Unlike `xmss_aggregate` there are no recursive children and no pubkey deduplication —
 /// the circuit verifies all N (pk, message, sig) triples independently as given.
 pub fn sphincs_aggregate(signers: &[SphincsSignerInput], log_inv_rate: usize) -> AggregatedSPHINCS {
-    let pubkeys: Vec<[F; HALF_DIGEST_SIZE]> = signers.iter().map(|s| s.pubkey.root()).collect();
+    let pubkeys: Vec<[F; DIGEST_LEN]> = signers.iter().map(|s| sphincs_full_pubkey(&s.pubkey)).collect();
     let messages: Vec<[F; MESSAGE_LEN_FE]> = signers.iter().map(|s| s.message).collect();
 
     let public_input = sphincs_public_input(&pubkeys, &messages).to_vec();
@@ -151,7 +168,7 @@ pub fn sphincs_aggregate(signers: &[SphincsSignerInput], log_inv_rate: usize) ->
 
 /// Verify a SPHINCS+ batch aggregation proof.
 pub fn sphincs_verify_aggregation(
-    pubkeys: &[[F; HALF_DIGEST_SIZE]],
+    pubkeys: &[[F; DIGEST_LEN]],
     messages: &[[F; MESSAGE_LEN_FE]],
     agg: &AggregatedSPHINCS,
 ) -> Result<ProofVerificationDetails, ProofError> {
@@ -168,8 +185,7 @@ pub fn sphincs_verify_aggregation(
 pub fn build_sphincs_witness(signers: &[SphincsSignerInput]) -> ExecutionWitness {
     let n = signers.len();
 
-    let pubkeys: Vec<[F; HALF_DIGEST_SIZE]> = signers.iter().map(|s| s.pubkey.root()).collect();
-    let pubkeys_flat: Vec<F> = pubkeys.iter().flatten().copied().collect();
+    let pubkeys_flat: Vec<F> = signers.iter().flat_map(|s| sphincs_full_pubkey(&s.pubkey)).collect();
     let messages_flat: Vec<F> = signers.iter().flat_map(|s| s.message.iter().copied()).collect();
 
     let mut hints: HashMap<String, Vec<Vec<F>>> = HashMap::new();
