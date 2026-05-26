@@ -16,7 +16,7 @@ MESSAGE_LEN           = 8    # FEs per message
 MSG_RANDOMNESS_LEN_FE = 4    # FEs of per-signature message randomness (prepended to zero-padded right half)
 
 FORS_SIG_SIZE_FE      = SPX_FORS_TREES * (1 + SPX_FORS_HEIGHT) * HALF_DIGEST_LEN   # 576 (half-digests)
-HYPERTREE_SIG_SIZE_FE = SPX_D * (RANDOMNESS_LEN + SPX_WOTS_LEN * HALF_DIGEST_LEN + SPX_TREE_HEIGHT * HALF_DIGEST_LEN)  # 456
+HYPERTREE_SIG_SIZE_FE = SPX_D * (RANDOMNESS_LEN + SPX_WOTS_LEN * HALF_DIGEST_LEN + SPX_TREE_HEIGHT * HALF_DIGEST_LEN)  # 534
 
 # ADRS type codes — must match address.rs constants
 ADRS_WOTS_HASH  = 0
@@ -243,6 +243,122 @@ def do_5_fors_merkle_level_const(k, pk_seed, tree_index, tree_ht_start, adrs1_pt
 @inline
 def do_5_fors_merkle_level(k, pk_seed, tree_index, tree_ht_start, adrs1_ptr, rem_ptr, leaf_index, state_in, sibling, state_out):
     match_range(k, range(0, 2**MERKLE_LEVEL_STEP), lambda k_prime: do_5_fors_merkle_level_const(k_prime, pk_seed, tree_index, tree_ht_start, adrs1_ptr, rem_ptr, leaf_index, state_in, sibling, state_out))
+    return
+
+
+@inline
+def do_5_hypertree_merkle_level_const(k, pk_seed, tree_adrs0, tree_ht_start,
+                                       adrs1_ptr, rem_ptr, leaf_index,
+                                       state_in, sibling, state_out):
+    # Advance MERKLE_LEVEL_STEP (5) levels of an XMSS hypertree Merkle tree with tweaked Poseidon.
+    # Identical structure to do_5_fors_merkle_level_const but uses TREE tweak in adrs0.
+    # k, tree_ht_start are compile-time; tree_adrs0, leaf_index are runtime.
+    #
+    # tree_adrs0 = layer + (ADRS_TREE << ADRS0_TYPE_SHIFT) + (layer_tree_address << ADRS0_TREE_SHIFT)
+    # adrs1 per level: filled by hint_fors_node_adrs (reused — TREE and FORS_TREE share adrs1 layout).
+
+    b0 = k % 2
+    b0r = (k - b0) / 2
+    b1 = b0r % 2
+    b1r = (b0r - b1) / 2
+    b2 = b1r % 2
+    b2r = (b1r - b2) / 2
+    b3 = b2r % 2
+    b3r = (b2r - b3) / 2
+    b4 = b3r % 2
+
+    intermediate_states = Array((MERKLE_LEVEL_STEP - 1) * HALF_DIGEST_LEN)
+
+    # Level 0: absolute height H0 = tree_ht_start + 1
+    H0 = tree_ht_start + 1
+    adrs1_0 = adrs1_ptr[0]
+    rem_0   = rem_ptr[0]
+    assert rem_0 < 2 ** H0
+    assert leaf_index == (adrs1_0 - H0 * (2 ** ADRS1_TREE_HT_SHIFT)) * (2 ** H0) + rem_0
+
+    right0 = Array(DIGEST_LEN)
+    if b0 == 0:
+        copy_4(state_in, right0)
+        copy_4(sibling, right0 + HALF_DIGEST_LEN)
+    else:
+        copy_4(sibling, right0)
+        copy_4(state_in, right0 + HALF_DIGEST_LEN)
+    adrs_compress(pk_seed, tree_adrs0, adrs1_0, right0, intermediate_states)
+
+    # Level 1: absolute height H1 = tree_ht_start + 2
+    H1 = tree_ht_start + 2
+    adrs1_1 = adrs1_ptr[1]
+    rem_1   = rem_ptr[1]
+    assert rem_1 < 2 ** H1
+    assert leaf_index == (adrs1_1 - H1 * (2 ** ADRS1_TREE_HT_SHIFT)) * (2 ** H1) + rem_1
+
+    right1 = Array(DIGEST_LEN)
+    if b1 == 0:
+        copy_4(intermediate_states, right1)
+        copy_4(sibling + HALF_DIGEST_LEN, right1 + HALF_DIGEST_LEN)
+    else:
+        copy_4(sibling + HALF_DIGEST_LEN, right1)
+        copy_4(intermediate_states, right1 + HALF_DIGEST_LEN)
+    adrs_compress(pk_seed, tree_adrs0, adrs1_1, right1, intermediate_states + HALF_DIGEST_LEN)
+
+    # Level 2: absolute height H2 = tree_ht_start + 3
+    H2 = tree_ht_start + 3
+    adrs1_2 = adrs1_ptr[2]
+    rem_2   = rem_ptr[2]
+    assert rem_2 < 2 ** H2
+    assert leaf_index == (adrs1_2 - H2 * (2 ** ADRS1_TREE_HT_SHIFT)) * (2 ** H2) + rem_2
+
+    right2 = Array(DIGEST_LEN)
+    if b2 == 0:
+        copy_4(intermediate_states + HALF_DIGEST_LEN, right2)
+        copy_4(sibling + 2 * HALF_DIGEST_LEN, right2 + HALF_DIGEST_LEN)
+    else:
+        copy_4(sibling + 2 * HALF_DIGEST_LEN, right2)
+        copy_4(intermediate_states + HALF_DIGEST_LEN, right2 + HALF_DIGEST_LEN)
+    adrs_compress(pk_seed, tree_adrs0, adrs1_2, right2, intermediate_states + 2 * HALF_DIGEST_LEN)
+
+    # Level 3: absolute height H3 = tree_ht_start + 4
+    H3 = tree_ht_start + 4
+    adrs1_3 = adrs1_ptr[3]
+    rem_3   = rem_ptr[3]
+    assert rem_3 < 2 ** H3
+    assert leaf_index == (adrs1_3 - H3 * (2 ** ADRS1_TREE_HT_SHIFT)) * (2 ** H3) + rem_3
+
+    right3 = Array(DIGEST_LEN)
+    if b3 == 0:
+        copy_4(intermediate_states + 2 * HALF_DIGEST_LEN, right3)
+        copy_4(sibling + 3 * HALF_DIGEST_LEN, right3 + HALF_DIGEST_LEN)
+    else:
+        copy_4(sibling + 3 * HALF_DIGEST_LEN, right3)
+        copy_4(intermediate_states + 2 * HALF_DIGEST_LEN, right3 + HALF_DIGEST_LEN)
+    adrs_compress(pk_seed, tree_adrs0, adrs1_3, right3, intermediate_states + 3 * HALF_DIGEST_LEN)
+
+    # Level 4: absolute height H4 = tree_ht_start + 5
+    H4 = tree_ht_start + 5
+    adrs1_4 = adrs1_ptr[4]
+    rem_4   = rem_ptr[4]
+    assert rem_4 < 2 ** H4
+    assert leaf_index == (adrs1_4 - H4 * (2 ** ADRS1_TREE_HT_SHIFT)) * (2 ** H4) + rem_4
+
+    right4 = Array(DIGEST_LEN)
+    if b4 == 0:
+        copy_4(intermediate_states + 3 * HALF_DIGEST_LEN, right4)
+        copy_4(sibling + 4 * HALF_DIGEST_LEN, right4 + HALF_DIGEST_LEN)
+    else:
+        copy_4(sibling + 4 * HALF_DIGEST_LEN, right4)
+        copy_4(intermediate_states + 3 * HALF_DIGEST_LEN, right4 + HALF_DIGEST_LEN)
+    adrs_compress(pk_seed, tree_adrs0, adrs1_4, right4, state_out)
+    return
+
+
+@inline
+def do_5_hypertree_merkle_level(k, pk_seed, tree_adrs0, tree_ht_start,
+                                 adrs1_ptr, rem_ptr, leaf_index,
+                                 state_in, sibling, state_out):
+    match_range(k, range(0, 2**MERKLE_LEVEL_STEP),
+        lambda k_prime: do_5_hypertree_merkle_level_const(k_prime, pk_seed, tree_adrs0,
+                                                           tree_ht_start, adrs1_ptr, rem_ptr, leaf_index,
+                                                           state_in, sibling, state_out))
     return
 
 

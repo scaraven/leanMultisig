@@ -4,10 +4,12 @@ use lean_vm::*;
 use rand::{RngExt, SeedableRng, rngs::StdRng};
 use rec_aggregation::{PREAMBLE_MEMORY_LEN, compilation::build_replacements, sphincs::split_leaf_upper};
 use sphincs::{
-    HALF_DIGEST_SIZE, HalfDigest, SPX_FORS_HEIGHT, SPX_FORS_TREES, SPX_WOTS_LEN, SPX_WOTS_W,
+    HALF_DIGEST_SIZE, HalfDigest, SPX_D, SPX_FORS_HEIGHT, SPX_FORS_TREES, SPX_TREE_HEIGHT, SPX_WOTS_LEN, SPX_WOTS_W,
     address::Adrs,
+    core::prf,
     fold_roots, fors_key_gen, fors_sig_to_flat, fors_sign, fors_sign_single_tree,
-    wots::{WotsPublicKey, find_randomness_for_wots_encoding, iterate_hash_half_from_half, wots_encode},
+    hypertree::{HypertreeSecretKey, build_layer_tree, extract_auth_path, hypertree_sign},
+    wots::{WotsPublicKey, WotsSecretKey, find_randomness_for_wots_encoding, iterate_hash_half_from_half, wots_encode},
 };
 use std::collections::HashMap;
 
@@ -355,6 +357,123 @@ fn test_sphincs_fors_verify() {
             "should fail: wrong expected root"
         );
     });
+}
+
+#[test]
+fn test_sphincs_hypertree_merkle_verify() {
+    run_on_large_stack(|| {
+        let bytecode = make_bytecode("test_hypertree_merkle_verify.py");
+
+        let mut rng = StdRng::seed_from_u64(42);
+        let sk_seed: HalfDigest = rng.random();
+        let pk_seed: HalfDigest = rng.random();
+
+        let layer = 0usize;
+        let layer_tree_address = 0usize;
+        let layer_leaf_index: usize = rng.random_range(..(1 << SPX_TREE_HEIGHT));
+
+        let (root, levels) = build_layer_tree(sk_seed, pk_seed, layer, layer_tree_address);
+        let auth_path = extract_auth_path(&levels, layer_leaf_index);
+
+        // Compute the WOTS+ leaf node (pk hash) as the Rust signer does.
+        let preimages: [HalfDigest; SPX_WOTS_LEN] = std::array::from_fn(|chain| {
+            let adrs = Adrs::wots_prf(
+                layer as u32,
+                layer_tree_address as u32,
+                layer_leaf_index as u32,
+                chain as u32,
+            );
+            prf(pk_seed, sk_seed, adrs)
+        });
+        let base_adrs = Adrs::wots_hash(layer as u32, layer_tree_address as u32, layer_leaf_index as u32, 0, 0);
+        let wots_pk = WotsSecretKey::new(preimages, pk_seed, base_adrs).public_key().clone();
+        let pk_adrs = Adrs::wots_pk(layer as u32, layer_tree_address as u32, layer_leaf_index as u32);
+        let leaf_node = wots_pk.hash(pk_seed, pk_adrs);
+
+        let tree_adrs0 = Adrs::tree(layer as u32, layer_tree_address as u32, 0, 0).adrs0;
+
+        let hints = HashMap::from([
+            ("pk_seed".to_string(), vec![pk_seed.to_vec()]),
+            ("tree_adrs0".to_string(), vec![vec![tree_adrs0]]),
+            (
+                "layer_leaf_index".to_string(),
+                vec![vec![F::from_usize(layer_leaf_index)]],
+            ),
+            ("leaf_node".to_string(), vec![leaf_node.to_vec()]),
+            (
+                "auth_path".to_string(),
+                vec![auth_path.iter().flatten().copied().collect()],
+            ),
+            ("expected_root".to_string(), vec![root.to_vec()]),
+        ]);
+        let witness = ExecutionWitness {
+            preamble_memory_len: PREAMBLE_MEMORY_LEN,
+            hints,
+        };
+        let profiling_result = execute_bytecode(&bytecode, &vec![F::from_usize(0); DIGEST_LEN], &witness, true);
+        println!("{}", profiling_result.metadata.profiling_report.unwrap());
+    });
+}
+
+#[test]
+fn test_sphincs_hypertree_verify() {
+    std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(|| {
+            let bytecode = make_bytecode("test_hypertree_verify.py");
+
+            let mut rng = StdRng::seed_from_u64(7);
+            let sk_seed: HalfDigest = rng.random();
+            let pk_seed: HalfDigest = rng.random();
+
+            let sk = HypertreeSecretKey::new(sk_seed, pk_seed);
+            let pk_root = sk.public_key().0;
+
+            let fors_pk: HalfDigest = rng.random();
+            let leaf_index: usize = rng.random_range(..(1 << SPX_TREE_HEIGHT));
+            let tree_address: usize = rng.random_range(..(1 << (SPX_D - 1) * SPX_TREE_HEIGHT));
+
+            // Build message as half_to_full(fors_pk) matching the zkDSL initial message.
+            let message = sphincs::wots::half_to_full(fors_pk);
+
+            let sig = hypertree_sign(&sk, &message, leaf_index, tree_address);
+            let sig_flat = sig.flatten_hypertree_sig();
+
+            // layer_leaf_indices: layer 0 = leaf_index; layer l>0 = (tree_address >> ((l-1)*SPX_TREE_HEIGHT)) & TREE_MASK
+            let tree_mask = (1 << SPX_TREE_HEIGHT) - 1;
+            let layer_leaf_indices: Vec<F> = (0..SPX_D)
+                .map(|l| {
+                    let idx = if l == 0 {
+                        leaf_index
+                    } else {
+                        (tree_address >> ((l - 1) * SPX_TREE_HEIGHT)) & tree_mask
+                    };
+                    F::from_usize(idx)
+                })
+                .collect();
+
+            // layer_tree_addresses for all 3 layers; layer 2 is always 0 (tree_address < 2^22).
+            let layer_tree_addresses: Vec<F> = (0..SPX_D)
+                .map(|l| F::from_usize(tree_address >> (l * SPX_TREE_HEIGHT)))
+                .collect();
+
+            let hints = HashMap::from([
+                ("pk_seed".to_string(), vec![pk_seed.to_vec()]),
+                ("fors_pubkey".to_string(), vec![fors_pk.to_vec()]),
+                ("layer_leaf_indices".to_string(), vec![layer_leaf_indices]),
+                ("layer_tree_addresses".to_string(), vec![layer_tree_addresses]),
+                ("expected_pk".to_string(), vec![pk_root.to_vec()]),
+                ("hypertree_sig".to_string(), vec![sig_flat]),
+            ]);
+            let witness = ExecutionWitness {
+                preamble_memory_len: PREAMBLE_MEMORY_LEN,
+                hints,
+            };
+            execute_bytecode(&bytecode, &vec![F::from_usize(0); DIGEST_LEN], &witness, false);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 #[test]

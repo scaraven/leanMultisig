@@ -417,73 +417,259 @@ shims have been removed.
 
 ### Phase 2 — zkDSL verifier updates
 
-The Rust signer is complete. The zkDSL verifier files in `crates/rec_aggregation/` need
-to be updated to match the new hash layouts. All changes are mechanical: add the uniform
-tweak (left half = `[pk_seed | adrs0, adrs1, 0, 0]`) to every Poseidon call that currently
-uses a bare compression, and update `RANDOMNESS_LEN` from 8 to 6.
-
-**`sphincs_utils.py`** — add `adrs_compress` helper and update `RANDOMNESS_LEN`
-```python
-RANDOMNESS_LEN = 6  # was 8; adrs0/adrs1 are compile-time constants, not stored
-
-@inline
-def adrs_compress(pk_seed, adrs0, adrs1, data_right, out):
-    left = Array(DIGEST_LEN)
-    copy_4(pk_seed, left)
-    left[4] = adrs0
-    left[5] = adrs1
-    left[6] = 0
-    left[7] = 0
-    poseidon16_compress(left, data_right, out)
-    return
+Work is done **module by module, testing after each**. Run tests with:
+```bash
+cargo test --release -p rec_aggregation <test_name>
 ```
-When `adrs0` and `adrs1` are compile-time Python integers (always true in unrolled loops),
-the compiler folds the left-half construction to a literal vector — zero runtime cost.
 
-**`sphincs_wots.py`** — thread `pk_seed` and ADRS through chain hashing
-- Add `pk_seed` parameter to `wots_encode_and_complete` and `_chain_hash_pair_const`.
-- In `wots_encode_and_complete`: replace the final `assert randomness[7] == layer_index`
-  with `assert randomness[6] == adrs0` and assert that `adrs0` matches the expected
-  `pack_adrs0(layer=l, type=WOTS_HASH, tree_addr=...)` (both compile-time constants).
-- In `_chain_hash_pair_const(n, pk_seed, adrs0, adrs1, input, output)`: replace bare
-  `poseidon16_compress(input, right, output)` with `adrs_compress(pk_seed, adrs0, adrs1,
-  right, output)`. The `adrs1` for each step encodes `(chain, hash_step)` and is a
-  compile-time constant when unrolled over `n`.
-- Note: WOTS chain steps currently use `right = [input | zeros]`; the new layout keeps
-  this but gains the tweaked left half.
+#### Status overview
 
-**`sphincs_fors.py`** — add ADRS to Merkle verification and leaf hashing
-- `fors_merkle_verify(pk_seed, tree_index, leaf_index, leaf_node, auth_path, out_root)`:
-  replace bare `poseidon16_compress(state_in, sibling, out)` at each level with:
-  ```python
-  adrs1 = tree_index_at_level + level_height * (2**SPX_FORS_HEIGHT)
-  adrs0 = pack_adrs0(layer=0, type=FORS_TREE, tree_addr=tree_index)
-  adrs_compress(pk_seed, adrs0, adrs1, right, out)
-  ```
-  `adrs1` is a runtime value (depends on current `tree_index` at each level), so it
-  costs one field addition per Merkle step.
-- Leaf node hashing (FORS_TREE height=0):
-  ```python
-  adrs1 = leaf_index   # tree_index = leaf_index, tree_height = 0
-  adrs_compress(pk_seed, adrs0_fors_tree, adrs1, half_to_full(leaf_secret), leaf_node)
-  ```
-- `fold_roots(pk_seed, roots, out)`: each fold step `i` uses
-  `adrs0 = pack_adrs0(0, FORS_ROOTS, 0)`, `adrs1 = i`.
+| Module | zkDSL file | Rust test | Status |
+|---|---|---|---|
+| utils | `sphincs_utils.py` | — | ✅ complete |
+| WOTS | `sphincs_wots.py` | `test_sphincs_wots_encode_complete` | ✅ complete |
+| FORS | `sphincs_fors.py` | `test_sphincs_fors_merkle_verify`, `test_sphincs_fors_verify` | ✅ complete |
+| Hypertree | `sphincs_hypertree.py` | `test_sphincs_hypertree_merkle_verify`, `test_sphincs_hypertree_verify` | ⬜ not started |
+| Aggregate | `sphincs_aggregate.py` | `test_sphincs_aggregate` | ⬜ not started |
 
-**`sphincs_hypertree.py`** — add ADRS to XMSS Merkle verification and between-layer message
-- `xmss_merkle_verify(pk_seed, layer, layer_tree_addr, leaf_index, leaf_node, auth_path, out)`:
-  replace bare Poseidon at each level with `adrs_compress` using `Adrs::tree` layout:
-  `adrs0 = pack_adrs0(layer, TREE, layer_tree_addr)`, `adrs1 = node_index + height * (2**SPX_TREE_HEIGHT)`.
-- Remove any `hash_inter_layer_message` call; the raw root `HalfDigest` is passed directly
-  as the next layer's message via `half_to_full(root)`.
-- Thread `pk_seed` through the layer loop as a constant loaded from the public key hint.
-- WOTS PK compression (`wots_pk_compress`): call with `Adrs::wots_pk` layout —
-  `adrs0 = pack_adrs0(layer, WOTS_PK, tree_addr)`, `adrs1 = layer_leaf_index`.
+---
 
-**`sphincs_aggregate.py`** — load `pk_seed` from public key hint
-- Public key hint now has 8 FEs: `[pk_seed[0..4] | pk_root[0..4]]`.
-- Load `pk_seed = hint[0..4]`, `pk_root = hint[4..8]`.
-- Pass `pk_seed` into every `sphincs_verify(pk_seed, pk_root, message, sig)` call.
+#### ✅ `sphincs_utils.py` — COMPLETE
+
+`adrs_compress(pk_seed, adrs0, adrs1, data_right, out)` is implemented. It builds
+`left = [pk_seed[0..4] | adrs0, adrs1, 0, 0]` and calls `poseidon16_compress_half`.
+When `adrs0`/`adrs1` are compile-time integers the compiler folds this to zero runtime cost.
+
+New helpers added:
+- `do_5_fors_merkle_level_const(k, pk_seed, tree_index, tree_ht_start, adrs1_ptr, rem_ptr, leaf_index, state_in, sibling, state_out)` — 5 tweaked half-digest Merkle levels for FORS trees.
+- `do_5_fors_merkle_level(...)` — `match_range` wrapper to make `k` compile-time.
+- `fold_wots_pubkey(pk_seed, adrs0, adrs1, chain_pub_keys, out)` — 31-step tweaked fold with WOTS_PK tweak. All nodes are `HALF_DIGEST_LEN` (4 FEs).
+- `fold_roots(pk_seed, roots, out)` — 8-step tweaked fold with FORS_ROOTS tweak.
+
+Constants: `RANDOMNESS_LEN = 6`, `FORS_SIG_SIZE_FE = 576`, `HYPERTREE_SIG_SIZE_FE = 534`.
+
+**Key design pattern for runtime floor division (`leaf_index >> H`):** zkDSL `/` is
+field (modular inverse) division, not integer division. For every Merkle level h, the
+`adrs1` value encodes `node_index = leaf_index >> H` where `H = tree_ht_start + h + 1`.
+This is solved by a VM-level custom hint `hint_fors_node_adrs(adrs1_ptr, rem_ptr, leaf_index, tree_ht_start)`
+that fills `MERKLE_LEVEL_STEP` slots with:
+```
+adrs1[h] = (leaf_index >> H) | (H << SPX_FORS_HEIGHT)
+rem[h]   = leaf_index % (1 << H)
+```
+The zkDSL then range-checks `rem[h] < 2^H` and asserts
+`leaf_index == (adrs1[h] - H * 2^ADRS1_TREE_HT_SHIFT) * 2^H + rem[h]`.
+This custom hint is implemented as `CustomHint::ForsNodeAdrs` in
+`crates/lean_vm/src/isa/hint.rs` (name: `"hint_fors_node_adrs"`, 4 args).
+
+---
+
+#### ✅ `sphincs_wots.py` — COMPLETE
+
+`wots_encode_and_complete(message, adrs0, adrs1, randomness, chain_tips, pk_seed, wots_pk_adrs0, wots_pk_adrs1, wots_pubkey)`:
+- Asserts `randomness[RANDOMNESS_LEN] == adrs0` and `randomness[RANDOMNESS_LEN+1] == adrs1`.
+- All WOTS chain hashing uses `adrs_compress` with WOTS_HASH tweak (compile-time adrs0/adrs1 per step).
+- WOTS PK fold uses `fold_wots_pubkey` with WOTS_PK tweak.
+- Output `wots_pubkey` is `HALF_DIGEST_LEN` (4 FEs).
+
+Rust test `test_sphincs_wots_encode_complete` passes. Hint layout for that test:
+`pk_seed` (4), `message` (8), `adrs0` (1), `adrs1` (1), `wots_pk_adrs0` (1), `wots_pk_adrs1` (1),
+`randomness` (8 = 6 random FEs + adrs0 + adrs1), `chain_tips` (128), `expected` (4).
+
+---
+
+#### ✅ `sphincs_fors.py` — COMPLETE
+
+`fors_merkle_verify(pk_seed, tree_index, leaf_index, leaf_secret, auth_path, out)`:
+- `match_range(tree_index, range(0, SPX_FORS_TREES), lambda t: _fors_merkle_verify_const(t, ...))` makes `tree_index` compile-time.
+- `_fors_merkle_verify_const` hashes `leaf_secret` → `leaf_node` as step 0 with `FORS_TREE` tweak at height=0: `adrs_compress(pk_seed, FORS_LEAF_ADRS0, leaf_index, leaf_right, leaf_node)`.
+- Uses `hint_decompose_bits_fors` to split `leaf_index` into `N_GROUPS = 3` five-bit sub-indices, then calls `hint_fors_node_adrs` per group.
+- Walks 3 groups of 5 levels via `do_5_fors_merkle_level`.
+- All nodes are `HALF_DIGEST_LEN` (4 FEs). `auth_path` is `SPX_FORS_HEIGHT * HALF_DIGEST_LEN` = 60 FEs.
+
+`fors_verify(pk_seed, fors_indices, fors_pk)`:
+- Hints `fors_sig` (576 FEs): `SPX_FORS_TREES * (1 + SPX_FORS_HEIGHT) * HALF_DIGEST_LEN`.
+  Layout per tree `t`: `[leaf_secret (4 FEs) | auth_path (60 FEs)]`.
+- Calls `fors_merkle_verify` for each tree, then `fold_roots`.
+- Output `fors_pk` is `HALF_DIGEST_LEN` (4 FEs).
+
+Rust helper `fors_sig_to_flat` in `crates/sphincs/src/fors.rs` emits:
+`leaf_secret (4) + auth_path (4×15 = 60)` per tree = 64 FEs × 9 trees = 576 FEs. ✅ matches.
+
+Rust tests `test_sphincs_fors_merkle_verify` and `test_sphincs_fors_verify` both pass.
+No external hint data needed for adrs1 — the VM hint handles it entirely.
+
+---
+
+#### ⬜ `sphincs_hypertree.py` — NOT STARTED
+
+**What needs to change:**
+
+The current implementation uses untweaked `poseidon16_compress` (full 8-FE nodes) for
+Merkle verification and an explicit `poseidon16_compress` inter-layer message hash.
+Both are wrong — the Rust signer uses `hash_xmss_node` (TREE tweak, HalfDigest output)
+and passes `half_to_full(layer_root)` directly between layers (no hash, just zero-pad).
+
+**`HYPERTREE_SIG_SIZE_FE`** is already correct in `sphincs_utils.py`:
+`3 * (6 + 32*4 + 11*4) = 3 * 178 = 534`. But `flatten_hypertree_sig` in
+`crates/sphincs/src/hypertree.rs` currently pushes `F::from_usize(layer_idx)` as an
+**extra FE** per layer (line 61: `out.push(F::from_usize(layer_idx))`), making the flat
+sig 537 FEs. **This must be removed** before the zkDSL test can pass — `layer` is now
+baked into `adrs0`, not stored in the signature.
+
+**Required changes in `sphincs_hypertree.py`:**
+
+1. **`hypertree_merkle_verify` new signature:**
+   ```python
+   def hypertree_merkle_verify(pk_seed, layer, layer_tree_address, layer_leaf_index, leaf_node, auth_path, root_out):
+   ```
+   - `layer` and `layer_tree_address` are compile-time (from the unrolled loop in `hypertree_verify`).
+   - `leaf_node` and `root_out` are `HALF_DIGEST_LEN` (4 FEs), not `DIGEST_LEN` (8 FEs).
+   - `auth_path` is `SPX_TREE_HEIGHT * HALF_DIGEST_LEN` = 44 FEs.
+   - Replace `do_1_merkle_level` + `do_5_merkle_level` (untweaked, full-digest) with a new
+     `do_5_hypertree_merkle_level` using the TREE tweak and `HALF_DIGEST_LEN` nodes.
+
+2. **New `do_5_hypertree_merkle_level_const` helper in `sphincs_utils.py`:**
+
+   This follows the same pattern as `do_5_fors_merkle_level_const` exactly, with two differences:
+   - `TREE_ADRS0 = ADRS_TREE * (2 ** ADRS0_TYPE_SHIFT) + layer * (2 ** ADRS0_LAYER_SHIFT) + layer_tree_address * (2 ** ADRS0_TREE_SHIFT)` — where `ADRS0_LAYER_SHIFT = 0` (layer is bits 1..0).
+     Actually: `adrs0 = layer | (ADRS_TREE << ADRS0_TYPE_SHIFT) | (layer_tree_address << ADRS0_TREE_SHIFT)`.
+   - `ADRS1_TREE_HT_SHIFT = SPX_FORS_HEIGHT = 15` is the same shift (reused for TREE type).
+   - The `hint_fors_node_adrs` VM hint computes `(leaf_index >> H) | (H << 15)` — this is
+     identical for TREE nodes since TREE and FORS_TREE share the same `adrs1` layout.
+     **Reuse `hint_fors_node_adrs` directly** for hypertree Merkle levels; no new VM hint needed.
+
+   Signature:
+   ```python
+   def do_5_hypertree_merkle_level_const(k, pk_seed, layer, layer_tree_address, tree_ht_start,
+                                          adrs1_ptr, rem_ptr, leaf_index,
+                                          state_in, sibling, state_out):
+   ```
+   And the `match_range` wrapper `do_5_hypertree_merkle_level(...)`.
+
+   **Note on decomposition:** `SPX_TREE_HEIGHT = 11`, which is not divisible by `MERKLE_LEVEL_STEP = 5`.
+   11 = 1 + 5 + 5. The current code handles this with `do_1_merkle_level` (1 level) followed
+   by two `do_5_merkle_level` calls. The new tweaked version must follow the same structure:
+   - One tweaked single-level step (level 1): new `do_1_hypertree_merkle_level` or inline it.
+   - Two `do_5_hypertree_merkle_level` calls (levels 2–6 and 7–11).
+
+   For the single level: use `adrs_compress` with `adrs1 = (leaf_index >> 1) | (1 << 15)`,
+   hinted via `hint_fors_node_adrs(adrs1_ptr, rem_ptr, leaf_index, 0)` taking only index 0.
+
+3. **`hypertree_verify` new implementation:**
+   ```python
+   def hypertree_verify(pk_seed, fors_pubkey, layer_leaf_indices, expected_pk):
+   ```
+   - Remove `messages` array and all `poseidon16_compress` between-layer calls.
+   - Between-layer message is `half_to_full(layer_root)` = `[layer_root[0..4] | 0, 0, 0, 0]`.
+     In zkDSL: allocate `msg = Array(DIGEST_LEN)`, `copy_4(layer_root, msg)`, `msg[4]=0; ...; msg[7]=0`.
+   - Layer 0 initial message: `half_to_full(fors_pubkey)` (same pattern: 4 FEs + 4 zeros).
+   - `wots_leaf = Array(HALF_DIGEST_LEN)` (not `DIGEST_LEN`).
+   - `layer_root = Array(HALF_DIGEST_LEN)` (not `DIGEST_LEN`).
+   - `expected_pk` is `HALF_DIGEST_LEN` (4 FEs, the hypertree root).
+   - The `wots_encode_and_complete` call keeps its current compile-time `adrs0`/`adrs1`
+     derivation. ADRS for layer `l`, tree `layer_tree_address`, leaf `layer_leaf_index`:
+     - `WOTS_HASH_ADRS0 = layer | (ADRS_WOTS_HASH << ADRS0_TYPE_SHIFT) | (layer_tree_address << ADRS0_TREE_SHIFT)` — compile-time for each unrolled `l`.
+     - `WOTS_HASH_ADRS1 = layer_leaf_index` — runtime (from `layer_leaf_indices[l]`).
+     - `WOTS_PK_ADRS0 = layer | (ADRS_WOTS_PK << ADRS0_TYPE_SHIFT) | (layer_tree_address << ADRS0_TREE_SHIFT)` — compile-time.
+     - `WOTS_PK_ADRS1 = layer_leaf_index` — runtime.
+
+     **Critical:** `layer_tree_address` is runtime (derived from `layer_leaf_indices`).
+     The current `hypertree_verify` uses `match_range` on `tree_index`? No — it doesn't.
+     The layer is compile-time (unroll), but `layer_tree_address` is runtime. Therefore
+     `WOTS_HASH_ADRS0` is **runtime** (because `layer_tree_address` shifts into it).
+     Follow the same `match_range` dispatch used in FORS if a compile-time tree address
+     is needed, OR accept that `adrs0` is runtime for the hypertree — which is fine since
+     `adrs_compress` supports runtime `adrs0/adrs1` scalars (no `match_range` required for
+     correctness, only for compile-time optimisation).
+
+   - `hypertree_sig` layout per layer `l`:
+     `randomness (6 FEs) | chain_tips (SPX_WOTS_LEN * HALF_DIGEST_LEN = 128 FEs) | auth_path (SPX_TREE_HEIGHT * HALF_DIGEST_LEN = 44 FEs)` = 178 FEs.
+     Layer offset: `l * 178`.
+
+**Required changes in `crates/sphincs/src/hypertree.rs`:**
+
+- Remove `out.push(F::from_usize(layer_idx));` from `flatten_hypertree_sig` (line 61).
+  After this removal the flat sig is `3 * (6 + 128 + 44) = 534` FEs = `HYPERTREE_SIG_SIZE_FE`. ✅
+
+**Required changes in test files:**
+
+`tests/test_hypertree_merkle_verify.py`:
+- Add `pk_seed` hint (4 FEs).
+- Add `layer` hint (1 FE scalar).
+- Add `layer_tree_address` hint (1 FE scalar).
+- Change `leaf_node` to `HALF_DIGEST_LEN` (4 FEs).
+- Change `auth_path` to `SPX_TREE_HEIGHT * HALF_DIGEST_LEN` = 44 FEs.
+- Change `expected_root` and `root_out` to `HALF_DIGEST_LEN`.
+- Call: `hypertree_merkle_verify(pk_seed, layer, layer_tree_address, layer_leaf_index, leaf_node, auth_path, out)`.
+
+`tests/test_hypertree_verify.py`:
+- Add `pk_seed` hint (4 FEs).
+- Change `fors_pubkey` hint to `HALF_DIGEST_LEN` (4 FEs).
+- Change `expected_pk` hint to `HALF_DIGEST_LEN` (4 FEs).
+- Call: `hypertree_verify(pk_seed, fors_pubkey, layer_leaf_indices, expected_pk)`.
+
+`tests/test_sphincs_utils.rs` — add two new test functions:
+
+`test_sphincs_hypertree_merkle_verify`:
+```rust
+// Build a single-layer tree, extract leaf/auth_path, call zkDSL
+let layer = 0usize;
+let layer_tree_address = 0usize;
+let layer_leaf_index: usize = rng.random_range(..(1 << SPX_TREE_HEIGHT));
+// Build tree via hypertree internals (build_layer_tree is pub in hypertree.rs).
+// Need: leaf_node = WOTS pk hash; auth_path = SPX_TREE_HEIGHT HalfDigests; root.
+HashMap::from([
+    ("pk_seed", vec![pk_seed.to_vec()]),
+    ("layer", vec![vec![F::from_usize(layer)]]),
+    ("layer_tree_address", vec![vec![F::from_usize(layer_tree_address)]]),
+    ("layer_leaf_index", vec![vec![F::from_usize(layer_leaf_index)]]),
+    ("leaf_node", vec![leaf_node.to_vec()]),  // HalfDigest
+    ("auth_path", vec![auth_path.iter().flatten().copied().collect()]),  // 44 FEs
+    ("expected_root", vec![root.to_vec()]),  // HalfDigest
+])
+```
+
+`test_sphincs_hypertree_verify`:
+```rust
+// Sign with hypertree_sign, call hypertree_verify, flatten sig (without layer_idx).
+let sig = hypertree_sign(&sk, &half_to_full(fors_pk), leaf_idx, tree_address);
+let sig_flat = sig.flatten_hypertree_sig();  // 534 FEs after fix
+HashMap::from([
+    ("pk_seed", vec![pk_seed.to_vec()]),
+    ("fors_pubkey", vec![fors_pk.to_vec()]),  // HalfDigest (4 FEs)
+    ("layer_leaf_indices", vec![layer_leaf_indices_as_fe]),  // 3 FEs
+    ("expected_pk", vec![pk_root.to_vec()]),  // HalfDigest (4 FEs)
+    ("hypertree_sig", vec![sig_flat]),
+])
+```
+
+Note: `build_layer_tree` and `extract_auth_path` may need to be made `pub` in `hypertree.rs`
+for the merkle test, or the test can use a full `hypertree_sign` call and extract the
+auth path from the resulting `HypertreeLayerSig`.
+
+**Verification commands:**
+```bash
+cargo test --release -p rec_aggregation test_sphincs_hypertree_merkle_verify
+cargo test --release -p rec_aggregation test_sphincs_hypertree_verify
+```
+
+---
+
+#### ⬜ `sphincs_aggregate.py` — NOT STARTED
+
+The public key hint is now 8 FEs: `[pk_seed[0..4] | pk_root[0..4]]`.
+
+Required changes:
+- Load `pk_seed = hint[0..4]`, `pk_root = hint[4..8]` from the public key hint.
+- Pass `pk_seed` into `hypertree_verify` and all other functions that need it.
+- `fors_verify(pk_seed, fors_indices, fors_pk)` already takes `pk_seed`.
+- `hypertree_verify(pk_seed, fors_pubkey, layer_leaf_indices, expected_pk)` will take `pk_seed` after the hypertree update.
+
+The `test_sphincs_aggregate` suite was previously hitting a SIGKILL (OOM/stack overflow)
+before any of these changes. That is a pre-existing issue unrelated to domain separation.
+
+---
 
 ### Key invariant
 
@@ -492,7 +678,8 @@ encoding step) remain compile-time constants → zero runtime overhead.
 
 ADRS values that depend on runtime Merkle path bits (tree_height + tree_index during
 auth path traversal) become a single runtime field element (`adrs1`) per Poseidon call.
-This adds one addition + one multiplication per Merkle step in the circuit.
+`adrs1` is not computed via field division — it is filled by `hint_fors_node_adrs` (or
+the same hint reused for hypertree) and proved correct via range-check + linear constraint.
 
 At 15 levels × 9 FORS trees + 11 levels × 3 hypertree layers = 135 + 33 = 168 affected
 Poseidon calls, this is 168 extra multiplications and 168 extra additions in the trace —

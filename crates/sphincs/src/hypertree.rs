@@ -56,9 +56,8 @@ pub struct HypertreeSignature {
 impl HypertreeSignature {
     pub fn flatten_hypertree_sig(&self) -> Vec<F> {
         let mut out = Vec::new();
-        for (layer_idx, layer) in self.layers.iter().enumerate() {
+        for layer in self.layers.iter() {
             out.extend_from_slice(&layer.wots_sig.randomness);
-            out.push(F::from_usize(layer_idx));
             out.extend(layer.wots_sig.chain_tips.iter().flatten().copied());
             out.extend(layer.auth_path.iter().flatten().copied());
         }
@@ -121,7 +120,7 @@ fn hash_xmss_node(
 }
 
 /// Materialise one full XMSS layer tree (2^SPX_TREE_HEIGHT = 2048 leaves).
-fn build_layer_tree(
+pub fn build_layer_tree(
     sk_seed: HalfDigest,
     pk_seed: HalfDigest,
     layer: usize,
@@ -156,7 +155,7 @@ fn build_layer_tree(
 }
 
 /// Extract the auth path for `leaf_index` from a materialised tree.
-fn extract_auth_path(levels: &[Vec<HalfDigest>], leaf_index: usize) -> Vec<HalfDigest> {
+pub fn extract_auth_path(levels: &[Vec<HalfDigest>], leaf_index: usize) -> Vec<HalfDigest> {
     (0..SPX_TREE_HEIGHT)
         .map(|level| {
             let sibling_idx = (leaf_index >> level) ^ 1;
