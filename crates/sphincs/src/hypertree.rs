@@ -57,9 +57,7 @@ impl HypertreeSignature {
     pub fn flatten_hypertree_sig(&self) -> Vec<F> {
         let mut out = Vec::new();
         for layer in self.layers.iter() {
-            out.extend_from_slice(&layer.wots_sig.randomness);
-            out.push(layer.wots_adrs0);
-            out.push(layer.wots_adrs1);
+            out.extend_from_slice(&layer.randomness_with_adrs);
             out.extend(layer.wots_sig.chain_tips.iter().flatten().copied());
             out.extend(layer.auth_path.iter().flatten().copied());
         }
@@ -70,9 +68,8 @@ impl HypertreeSignature {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HypertreeLayerSig {
     pub wots_sig: WotsSignature,
-    /// adrs0 and adrs1 for the WOTS_HASH address at this layer's signing leaf.
-    pub wots_adrs0: F,
-    pub wots_adrs1: F,
+    /// [r0..r5, adrs0, adrs1] — 8-FE block consumed by wots_encode_and_complete in the zkDSL.
+    pub randomness_with_adrs: [F; 8],
     /// Sibling digests from the leaf level up to (but not including) the root.
     /// Length = SPX_TREE_HEIGHT = 11.
     pub auth_path: Vec<HalfDigest>,
@@ -212,7 +209,11 @@ pub fn hypertree_sign(
             current_message = half_to_full(root);
         }
 
-        HypertreeLayerSig { wots_sig, wots_adrs0: adrs.adrs0, wots_adrs1: adrs.adrs1, auth_path }
+        let mut randomness_with_adrs = [F::ZERO; 8];
+        randomness_with_adrs[..6].copy_from_slice(&wots_sig.randomness);
+        randomness_with_adrs[6] = adrs.adrs0;
+        randomness_with_adrs[7] = adrs.adrs1;
+        HypertreeLayerSig { wots_sig, randomness_with_adrs, auth_path }
     });
 
     HypertreeSignature { layers }
