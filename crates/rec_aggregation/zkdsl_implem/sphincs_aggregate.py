@@ -77,8 +77,7 @@ def decompose_message_digest(message_digest):
     return indices
 
 
-@inline
-def sphincs_verify(pk_seed_offset, pk_root, message):
+def sphincs_verify(pk_seed_offset: Const, pk_root, message):
     # Top-level SPHINCS+ signature verifier.
     #
     # Steps:
