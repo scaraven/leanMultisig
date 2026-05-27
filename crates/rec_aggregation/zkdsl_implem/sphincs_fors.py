@@ -3,7 +3,7 @@ from sphincs_utils import *
 from utils import *
 
 @inline
-def _fors_merkle_verify_const(tree_index, pk_seed, leaf_index, leaf_secret, auth_path, out):
+def _fors_merkle_verify_const(tree_index, pk_seed_offset, leaf_index, leaf_secret, auth_path, out):
     # Inner implementation of fors_merkle_verify with compile-time tree_index.
     # Called via match_range in fors_merkle_verify.
     #
@@ -20,7 +20,7 @@ def _fors_merkle_verify_const(tree_index, pk_seed, leaf_index, leaf_secret, auth
     leaf_right[6] = 0
     leaf_right[7] = 0
     leaf_node = Array(HALF_DIGEST_LEN)
-    adrs_compress(pk_seed, FORS_LEAF_ADRS0, leaf_index, leaf_right, leaf_node)
+    adrs_compress_hcl(pk_seed_offset, FORS_LEAF_ADRS0, leaf_index, leaf_right, leaf_node)
 
     N_GROUPS = SPX_FORS_HEIGHT / MERKLE_LEVEL_STEP
 
@@ -47,17 +47,17 @@ def _fors_merkle_verify_const(tree_index, pk_seed, leaf_index, leaf_secret, auth
 
     intermediate_nodes = Array(HALF_DIGEST_LEN * (N_GROUPS - 1))
 
-    do_5_fors_merkle_level(sub_indices[0], pk_seed, tree_index, 0,
+    do_5_fors_merkle_level(sub_indices[0], pk_seed_offset, tree_index, 0,
                             adrs1_buf, rem_buf, leaf_index,
                             leaf_node, auth_path, intermediate_nodes)
     for i in unroll(1, N_GROUPS - 1):
-        do_5_fors_merkle_level(sub_indices[i], pk_seed, tree_index, i * MERKLE_LEVEL_STEP,
+        do_5_fors_merkle_level(sub_indices[i], pk_seed_offset, tree_index, i * MERKLE_LEVEL_STEP,
                                 adrs1_buf + i * MERKLE_LEVEL_STEP,
                                 rem_buf   + i * MERKLE_LEVEL_STEP, leaf_index,
                                 intermediate_nodes + (i - 1) * HALF_DIGEST_LEN,
                                 auth_path + MERKLE_LEVEL_STEP * i * HALF_DIGEST_LEN,
                                 intermediate_nodes + i * HALF_DIGEST_LEN)
-    do_5_fors_merkle_level(sub_indices[N_GROUPS - 1], pk_seed, tree_index,
+    do_5_fors_merkle_level(sub_indices[N_GROUPS - 1], pk_seed_offset, tree_index,
                             (N_GROUPS - 1) * MERKLE_LEVEL_STEP,
                             adrs1_buf + (N_GROUPS - 1) * MERKLE_LEVEL_STEP,
                             rem_buf   + (N_GROUPS - 1) * MERKLE_LEVEL_STEP, leaf_index,
@@ -68,34 +68,34 @@ def _fors_merkle_verify_const(tree_index, pk_seed, leaf_index, leaf_secret, auth
 
 
 @inline
-def fors_merkle_verify(pk_seed, tree_index, leaf_index, leaf_secret, auth_path, out):
+def fors_merkle_verify(pk_seed_offset, tree_index, leaf_index, leaf_secret, auth_path, out):
     # Verify a single SPX_FORS_HEIGHT (15)-level binary Merkle auth path.
     # Dispatches on tree_index via match_range so that the compile-time tree_index reaches
     # _fors_merkle_verify_const (needed for compile-time ADRS constants).
     #
     # Inputs:
-    #   pk_seed     — pointer to HALF_DIGEST_LEN (4) FEs: per-signer public seed
+    #   pk_seed_offset — compile-time constant: address of this signer's pk_seed in the pk_seed table
     #   tree_index  — runtime or compile-time scalar: which FORS tree (0..SPX_FORS_TREES-1)
     #   leaf_index  — scalar < 2^SPX_FORS_HEIGHT
     #   leaf_secret — HALF_DIGEST_LEN FEs: raw FORS leaf secret (pre-image)
     #   auth_path   — SPX_FORS_HEIGHT * HALF_DIGEST_LEN FEs: sibling hashes, bottom-up
     # Output:
     #   out         — HALF_DIGEST_LEN FEs: computed Merkle root
-    match_range(tree_index, range(0, SPX_FORS_TREES), lambda t: _fors_merkle_verify_const(t, pk_seed, leaf_index, leaf_secret, auth_path, out))
+    match_range(tree_index, range(0, SPX_FORS_TREES), lambda t: _fors_merkle_verify_const(t, pk_seed_offset, leaf_index, leaf_secret, auth_path, out))
     return
 
 @inline
-def fors_verify(pk_seed, fors_indices, fors_pk):
+def fors_verify(pk_seed_offset, fors_indices, fors_pk):
     # Verify all SPX_FORS_TREES (9) FORS trees and fold their roots into the FORS public key.
     #
     # For each tree t in unroll(0, SPX_FORS_TREES):
     #   - Read leaf_secret at fors_sig + t * (1 + SPX_FORS_HEIGHT) * HALF_DIGEST_LEN.
-    #   - Run fors_merkle_verify(pk_seed, t, fors_indices[t], leaf_secret, auth_path, roots[t]).
+    #   - Run fors_merkle_verify(pk_seed_offset, t, fors_indices[t], leaf_secret, auth_path, roots[t]).
     # Then fold the 9 roots into fors_pubkey via fold_roots.
-    # Costs 9*(1 + 15) (leaf hash + auth path) + 8 (fold) = 152 adrs_compress calls.
+    # Costs 9*(1 + 15) (leaf hash + auth path) + 8 (fold) = 152 adrs_compress_hcl calls.
     #
     # Inputs:
-    #   pk_seed      — pointer to HALF_DIGEST_LEN (4) FEs: per-signer public seed
+    #   pk_seed_offset — compile-time constant: address of this signer's pk_seed in the pk_seed table
     #   fors_indices — SPX_FORS_TREES FEs, each < 2^SPX_FORS_HEIGHT
     # Hints:
     #   fors_sig     — FORS_SIG_SIZE_FE FEs: introduced via hint_witness
@@ -107,7 +107,7 @@ def fors_verify(pk_seed, fors_indices, fors_pk):
     roots = Array(SPX_FORS_TREES * HALF_DIGEST_LEN)
     for t in unroll(0, SPX_FORS_TREES):
         tree_base = fors_sig + t * (1 + SPX_FORS_HEIGHT) * HALF_DIGEST_LEN
-        fors_merkle_verify(pk_seed, t, fors_indices[t], tree_base, tree_base + HALF_DIGEST_LEN, roots + t * HALF_DIGEST_LEN)
+        fors_merkle_verify(pk_seed_offset, t, fors_indices[t], tree_base, tree_base + HALF_DIGEST_LEN, roots + t * HALF_DIGEST_LEN)
 
-    fold_roots(pk_seed, roots, fors_pk)
+    fold_roots(pk_seed_offset, roots, fors_pk)
     return

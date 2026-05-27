@@ -250,9 +250,9 @@ def factorial(n):
     let exec_par = execute_bytecode(&compiled_parallel, &[], &ExecutionWitness::default(), false);
     let duration_parallel = time_parallel.elapsed();
 
+    // Only check output correctness; cycle/memory counts differ because parallel_range with
+    // compile-time-constant bounds now unrolls (like `unroll`) while `range` stays a runtime loop.
     assert_eq!(exec_seq.metadata.stdout, exec_par.metadata.stdout);
-    assert_eq!(exec_seq.n_cycles(), exec_par.n_cycles());
-    assert_eq!(exec_seq.runtime_memory_size, exec_par.runtime_memory_size);
 
     println!("Sequential duration: {:.4}s", duration_sequential.as_secs_f64());
     println!("Parallel duration: {:.4}s", duration_parallel.as_secs_f64());

@@ -2,7 +2,9 @@ use backend::PrimeCharacteristicRing;
 use lean_compiler::*;
 use lean_vm::*;
 use rand::{RngExt, SeedableRng, rngs::StdRng};
-use rec_aggregation::{PREAMBLE_MEMORY_LEN, compilation::build_replacements, sphincs::split_leaf_upper};
+use rec_aggregation::{
+    PREAMBLE_MEMORY_LEN, PREAMBLE_MEMORY_LEN_SPHINCS, compilation::build_replacements, sphincs::split_leaf_upper,
+};
 use sphincs::{
     HALF_DIGEST_SIZE, HalfDigest, HypertreeSecretKey, HypertreeSignature, MESSAGE_LEN_FE, MSG_RANDOMNESS_LEN_FE,
     RANDOMNESS_LEN_FE, SPX_D, SPX_TREE_BITS, SPX_TREE_HEIGHT, SPX_WOTS_LEN,
@@ -127,11 +129,9 @@ fn build_sphincs_hints(seed: [u8; 20], message: [F; MESSAGE_LEN_FE]) -> HashMap<
         SPX_D * ((RANDOMNESS_LEN_FE + 2) + (SPX_WOTS_LEN + SPX_TREE_HEIGHT) * HALF_DIGEST_SIZE);
     assert_eq!(hypertree_sig_flat.len(), expected_hypertree_len);
 
-    // pk hint: [pk_seed(4) | pk_root(4)] — 8 FEs total, matching DIGEST_LEN in the circuit.
-    let pk_full: Vec<F> = pk_seed.iter().chain(pk_root.iter()).copied().collect();
-
     HashMap::from([
-        ("pk".to_string(), vec![pk_full]),
+        ("pk".to_string(), vec![pk_seed.to_vec()]),
+        ("pk_root".to_string(), vec![pk_root.to_vec()]),
         ("message".to_string(), vec![message.to_vec()]),
         (
             "randomness".to_string(),
@@ -163,7 +163,7 @@ fn profile_sphincs_verify() {
         let message = [F::from_usize(0); MESSAGE_LEN_FE];
         let hints = build_sphincs_hints(seed, message);
         let witness = ExecutionWitness {
-            preamble_memory_len: PREAMBLE_MEMORY_LEN,
+            preamble_memory_len: PREAMBLE_MEMORY_LEN_SPHINCS,
             hints,
         };
 
@@ -182,7 +182,7 @@ fn test_sphincs_aggregate_verify() {
 
         let hints = build_sphincs_hints(seed, message);
         let witness = ExecutionWitness {
-            preamble_memory_len: PREAMBLE_MEMORY_LEN,
+            preamble_memory_len: PREAMBLE_MEMORY_LEN_SPHINCS,
             hints,
         };
 
@@ -224,7 +224,10 @@ fn test_hypertree_merkle_verify() {
 
         let hints = HashMap::from([
             ("pk_seed".to_string(), vec![pk_seed.to_vec()]),
-            ("tree_adrs0".to_string(), vec![vec![Adrs::tree(0, layer_tree_address as u32, 0, 0).adrs0]]),
+            (
+                "tree_adrs0".to_string(),
+                vec![vec![Adrs::tree(0, layer_tree_address as u32, 0, 0).adrs0]],
+            ),
             ("layer_leaf_index".to_string(), vec![vec![F::from_usize(leaf_idx)]]),
             ("leaf_node".to_string(), vec![leaf_node.to_vec()]),
             (

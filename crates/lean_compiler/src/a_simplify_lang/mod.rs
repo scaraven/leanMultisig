@@ -819,6 +819,34 @@ fn compile_time_transform_in_lines(
                 lines.splice(i..=i, unrolled);
                 continue;
             }
+            // parallel_range with compile-time-constant bounds: unroll like `unroll`, giving the
+            // iterator a compile-time value per iteration. This is required when the body passes
+            // the iterator as an offset argument to hardcoded-left precompiles. When the bounds
+            // are runtime the loop falls through and is compiled into a recursive parallel function
+            // as usual.
+            Line::ForLoop {
+                iterator,
+                start,
+                end,
+                body,
+                loop_kind: LoopKind::ParallelRange,
+                ..
+            } if start.as_scalar().is_some() && end.as_scalar().is_some() => {
+                let start = start.as_scalar().unwrap();
+                let end = end.as_scalar().unwrap();
+                let unroll_index = unroll_counter.get_next();
+                let (internal_vars, _) = find_variable_usage(body, const_arrays);
+                let iterator = iterator.clone();
+                let body = body.clone();
+                let mut unrolled = Vec::new();
+                for j in start.to_usize()..end.to_usize() {
+                    let mut body_copy = body.clone();
+                    replace_vars_for_unroll(&mut body_copy, &iterator, unroll_index, j, &internal_vars);
+                    unrolled.extend(body_copy);
+                }
+                lines.splice(i..=i, unrolled);
+                continue;
+            }
             _ => {}
         }
 

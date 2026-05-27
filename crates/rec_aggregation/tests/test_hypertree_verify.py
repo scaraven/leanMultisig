@@ -6,8 +6,8 @@ from ..zkdsl_implem.utils import *
 def main():
     build_preamble_memory()
 
-    pk_seed = Array(HALF_DIGEST_LEN)
-    hint_witness("pk_seed", pk_seed)
+    pk_seed_slot: Mut = PK_SEED_TABLE_ADDR
+    hint_witness("pk_seed", pk_seed_slot)
 
     fors_pubkey = Array(HALF_DIGEST_LEN)
     hint_witness("fors_pubkey", fors_pubkey)
@@ -18,5 +18,5 @@ def main():
     expected_pk = Array(HALF_DIGEST_LEN)
     hint_witness("expected_pk", expected_pk)
 
-    hypertree_verify(pk_seed, fors_pubkey, layer_leaf_indices, expected_pk)
+    hypertree_verify(PK_SEED_TABLE_ADDR, fors_pubkey, layer_leaf_indices, expected_pk)
     return

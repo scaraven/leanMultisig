@@ -15,6 +15,13 @@ REPEATED_ONES_PTR = ONE_EF_PTR + DIM
 PREAMBLE_MEMORY_END = REPEATED_ONES_PTR + NUM_REPEATED_ONES
 PREAMBLE_MEMORY_LEN = PREAMBLE_MEMORY_END - PUBLIC_INPUT_LEN
 
+# SPHINCS+ batch verifier extends the preamble with a per-signer pk_seed table.
+# Each signer i has its pk_seed at PK_SEED_TABLE_ADDR + i * HALF_DIGEST_LEN (4 FEs).
+MAX_N_SIGS_SPHINCS = 2**10
+PK_SEED_TABLE_ADDR = PREAMBLE_MEMORY_END
+PK_SEED_TABLE_LEN = MAX_N_SIGS_SPHINCS * 4  # 4 FEs per pk_seed (HALF_DIGEST_LEN)
+PREAMBLE_MEMORY_LEN_SPHINCS = PK_SEED_TABLE_ADDR + PK_SEED_TABLE_LEN - PUBLIC_INPUT_LEN
+
 
 def batch_hash_slice_rtl(num_queries, all_data_to_hash, all_resulting_hashes, num_chunks):
     if num_chunks == DIM * 2:

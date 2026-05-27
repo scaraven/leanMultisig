@@ -4,16 +4,16 @@ use lean_prover::prove_execution::prove_execution;
 use lean_prover::verify_execution::{ProofVerificationDetails, verify_execution};
 use lean_vm::{DIGEST_LEN, ExecutionMetadata, ExecutionWitness, F};
 use serde::{Deserialize, Serialize};
-use sphincs::{SPX_D, SPX_TREE_HEIGHT};
 use sphincs::{
     HALF_DIGEST_SIZE, MESSAGE_LEN_FE,
     core::{SphincsPublicKey, SphincsSig, extract_digest_parts, hmsg},
     fors_sig_to_flat,
 };
+use sphincs::{SPX_D, SPX_TREE_HEIGHT};
 use std::collections::HashMap;
 use utils::{poseidon_compress_slice, poseidon16_compress_pair};
 
-use crate::PREAMBLE_MEMORY_LEN;
+use crate::compilation::{PK_SEED_TABLE_LEN, PREAMBLE_MEMORY_LEN_SPHINCS};
 
 const HINT_DECOMPOSE_BITS_LOWER: usize = (31 - SPX_TREE_HEIGHT) / 2;
 const HINT_DECOMPOSE_BITS_UPPER: usize = (31 - SPX_TREE_HEIGHT) - HINT_DECOMPOSE_BITS_LOWER;
@@ -188,17 +188,21 @@ pub fn build_sphincs_witness(signers: &[SphincsSignerInput]) -> ExecutionWitness
     let pubkeys_flat: Vec<F> = signers.iter().flat_map(|s| sphincs_full_pubkey(&s.pubkey)).collect();
     let messages_flat: Vec<F> = signers.iter().flat_map(|s| s.message.iter().copied()).collect();
 
+    let mut pk_seeds_flat: Vec<F> = signers.iter().flat_map(|s| s.pubkey.pk_seed.iter().copied()).collect();
+    pk_seeds_flat.resize(PK_SEED_TABLE_LEN, F::ZERO);
+
     let mut hints: HashMap<String, Vec<Vec<F>>> = HashMap::new();
     hints.insert("n_sigs".to_string(), vec![vec![F::from_usize(n)]]);
     hints.insert("pubkeys".to_string(), vec![pubkeys_flat]);
     hints.insert("messages".to_string(), vec![messages_flat]);
+    hints.insert("pk_seeds".to_string(), vec![pk_seeds_flat]);
 
     for signer in signers {
         build_signer_hints(&signer.pubkey, &signer.sig, &signer.message, &mut hints);
     }
 
     ExecutionWitness {
-        preamble_memory_len: PREAMBLE_MEMORY_LEN,
+        preamble_memory_len: PREAMBLE_MEMORY_LEN_SPHINCS,
         hints,
     }
 }

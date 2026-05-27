@@ -78,7 +78,7 @@ def decompose_message_digest(message_digest):
 
 
 @inline
-def sphincs_verify(pk, message):
+def sphincs_verify(pk_seed_offset, pk_root, message):
     # Top-level SPHINCS+ signature verifier.
     #
     # Steps:
@@ -87,21 +87,22 @@ def sphincs_verify(pk, message):
     #        call2: left=[call1_out[0..4] | 0,0,0,0], right=[message[4..8] | 0,0,0,0]
     #   2. Decompose the digest via decompose_message_digest to obtain
     #      layer_leaf_indices[3] and fors_indices[9].
-    #   3. Verify FORS: fors_pk = fors_verify(pk_seed, fors_indices).
-    #   4. Verify hypertree: hypertree_verify(pk_seed, fors_pk, layer_leaf_indices, pk_root).
+    #   3. Verify FORS: fors_pk = fors_verify(pk_seed_offset, fors_indices).
+    #   4. Verify hypertree: hypertree_verify(pk_seed_offset, fors_pk, layer_leaf_indices, pk_root).
     #
     # Inputs:
-    #   pk      — DIGEST_LEN (8) FEs: [pk_seed(4) | pk_root(4)]
-    #   message — MESSAGE_LEN (8) FEs
+    #   pk_seed_offset — compile-time constant: address of this signer's pk_seed in the pk_seed table
+    #   pk_root        — pointer to HALF_DIGEST_LEN (4) FEs: per-signer public key root
+    #   message        — MESSAGE_LEN (8) FEs
     randomness_arr = Array(MSG_RANDOMNESS_LEN_FE)
     hint_witness("randomness", randomness_arr)
 
-    pk_seed = pk
-    pk_root = pk + HALF_DIGEST_LEN
-
+    # hmsg call 1: left = [r[0..4] | pk_seed[0..4]].
+    # pk_seed is in the upper half, so poseidon16_compress_half_hardcoded_left cannot be used here
+    # (it supplies the lower half from offset). We read pk_seed directly from the table.
     left1 = Array(DIGEST_LEN)
     copy_4(randomness_arr, left1)
-    copy_4(pk_seed, left1 + HALF_DIGEST_LEN)
+    copy_4(pk_seed_offset, left1 + HALF_DIGEST_LEN)
 
     right1 = Array(DIGEST_LEN)
     copy_4(pk_root, right1)
@@ -126,7 +127,7 @@ def sphincs_verify(pk, message):
     indices = decompose_message_digest(message_digest)
 
     fors_pk = Array(HALF_DIGEST_LEN)
-    fors_verify(pk_seed, indices + SPX_D, fors_pk)
+    fors_verify(pk_seed_offset, indices + SPX_D, fors_pk)
 
-    hypertree_verify(pk_seed, fors_pk, indices, pk_root)
+    hypertree_verify(pk_seed_offset, fors_pk, indices, pk_root)
     return

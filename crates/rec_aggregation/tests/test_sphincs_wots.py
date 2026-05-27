@@ -6,16 +6,12 @@ from ..zkdsl_implem.utils import *
 def main():
     build_preamble_memory()
 
-    pk_seed = Array(HALF_DIGEST_LEN)
-    hint_witness("pk_seed", pk_seed)
+    pk_seed_slot: Mut = PK_SEED_TABLE_ADDR
+    hint_witness("pk_seed", pk_seed_slot)
 
     message = Array(DIGEST_LEN)
     hint_witness("message", message)
 
-    # adrs0 and adrs1 are compile-time constants supplied by the Rust test harness
-    # via the randomness hint (slots RANDOMNESS_LEN and RANDOMNESS_LEN+1).
-    # The circuit asserts these slots equal the expected compile-time values,
-    # so we read them back from the randomness buffer rather than as separate hints.
     adrs0_buf = Array(1)
     hint_witness("adrs0", adrs0_buf)
     adrs0 = adrs0_buf[0]
@@ -43,7 +39,7 @@ def main():
     hint_witness("expected", expected_wots_pubkey)
 
     wots_pubkey = Array(HALF_DIGEST_LEN)
-    wots_encode_and_complete(message, adrs0, adrs1, randomness, chain_tips, pk_seed, wots_pk_adrs0, wots_pk_adrs1, wots_pubkey)
+    wots_encode_and_complete(message, adrs0, adrs1, randomness, chain_tips, PK_SEED_TABLE_ADDR, wots_pk_adrs0, wots_pk_adrs1, wots_pubkey)
     for i in unroll(0, HALF_DIGEST_LEN):
         assert wots_pubkey[i] == expected_wots_pubkey[i]
     return

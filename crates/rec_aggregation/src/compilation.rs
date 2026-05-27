@@ -13,6 +13,7 @@ use utils::Counter;
 use xmss::{LOG_LIFETIME, MESSAGE_LEN_FE};
 
 use crate::type_1_aggregation::TWEAK_TABLE_SIZE_FE_PADDED;
+use sphincs::HALF_DIGEST_SIZE;
 
 // preamble memory layout: see `build_preamble_memory` in utils.py:
 // [000.. (ZERO_VEC_LEN)][10000000 (fiat-shamir domain sep)][10000 (one in extension field)][111... (NUM_REPEATED_ONES)][tweak table]
@@ -20,6 +21,12 @@ pub const ZERO_VEC_LEN: usize = 16;
 pub const NUM_REPEATED_ONES: usize = 32;
 pub const PREAMBLE_MEMORY_LEN: usize =
     ZERO_VEC_LEN + DIGEST_LEN + DIMENSION + NUM_REPEATED_ONES + TWEAK_TABLE_SIZE_FE_PADDED;
+
+// SPHINCS+ batch verifier extends the preamble with a pk_seed table after the base preamble.
+// This mirrors how main_sphincs.py defines PK_SEED_TABLE_ADDR = PREAMBLE_MEMORY_END.
+pub const MAX_N_SIGS_SPHINCS: usize = 1 << 12;
+pub const PK_SEED_TABLE_LEN: usize = MAX_N_SIGS_SPHINCS * HALF_DIGEST_SIZE;
+pub const PREAMBLE_MEMORY_LEN_SPHINCS: usize = PREAMBLE_MEMORY_LEN + PK_SEED_TABLE_LEN;
 
 pub(crate) const MERKLE_LEVELS_PER_CHUNK_FOR_SLOT: usize = 4;
 pub(crate) const N_MERKLE_CHUNKS_FOR_SLOT: usize = LOG_LIFETIME / MERKLE_LEVELS_PER_CHUNK_FOR_SLOT;

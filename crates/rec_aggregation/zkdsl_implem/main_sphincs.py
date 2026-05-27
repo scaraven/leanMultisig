@@ -2,7 +2,7 @@ from snark_lib import *
 from hashing import *
 from sphincs_aggregate import *
 
-MAX_N_SIGS = 2**12
+MAX_N_SIGS = MAX_N_SIGS_SPHINCS
 MAX_LOG_N_SIGS = 12
 
 
@@ -48,6 +48,9 @@ def main():
     messages = Array(n_sigs * MESSAGE_LEN)
     hint_witness("messages", messages)
 
+    pk_seeds_table: Mut = PK_SEED_TABLE_ADDR
+    hint_witness("pk_seeds", pk_seeds_table)
+
     """
     Commit to (n_sigs, pubkeys, messages) without copying by hashing each segment
     independently then folding the three digests into one.
@@ -74,9 +77,11 @@ def main():
     Verify each signature independently. sphincs_verify consumes per-signer hints
     internally in order, one set per call.
     """
-    for i in parallel_range(0, n_sigs):
-        pk = pubkeys + i * DIGEST_LEN
-        message = messages + i * MESSAGE_LEN
-        sphincs_verify(pk, message)
+    for i in parallel_range(0, MAX_N_SIGS):
+        if i < n_sigs:
+            pk_seed_offset = PK_SEED_TABLE_ADDR + i * HALF_DIGEST_LEN
+            pk_root = pubkeys + i * DIGEST_LEN + HALF_DIGEST_LEN
+            message = messages + i * MESSAGE_LEN
+            sphincs_verify(pk_seed_offset, pk_root, message)
 
     return

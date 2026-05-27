@@ -3,14 +3,15 @@ from sphincs_utils import *
 
 
 @inline
-def _iterate_hash_const_tweaked(input, k, pk_seed, adrs0, adrs1_start, output):
+def _iterate_hash_const_tweaked(input, k, pk_seed_offset, adrs0, adrs1_start, output):
     # Hash a HalfDigest input for k steps with WOTS_HASH tweak, starting at hash_address = adrs1_start.
     # adrs0, adrs1_start, and k are all compile-time constants at every call site.
     #
-    # Each step j: right = [input[0..4] | 0,0,0,0], then adrs_compress with adrs1 advancing by 2**ADRS1_HASH_SHIFT.
+    # Each step j: right = [input[0..4] | 0,0,0,0], then adrs_compress_hcl with adrs1 advancing by 2**ADRS1_HASH_SHIFT.
     #
-    # input  — pointer to HALF_DIGEST_LEN (4) FEs
-    # output — pointer to HALF_DIGEST_LEN (4) FEs
+    # input          — pointer to HALF_DIGEST_LEN (4) FEs
+    # pk_seed_offset — compile-time constant: address of this signer's pk_seed in the pk_seed table
+    # output         — pointer to HALF_DIGEST_LEN (4) FEs
     if k == 0:
         copy_4(input, output)
     elif k == 1:
@@ -20,7 +21,7 @@ def _iterate_hash_const_tweaked(input, k, pk_seed, adrs0, adrs1_start, output):
         right[5] = 0
         right[6] = 0
         right[7] = 0
-        adrs_compress(pk_seed, adrs0, adrs1_start, right, output)
+        adrs_compress_hcl(pk_seed_offset, adrs0, adrs1_start, right, output)
     else:
         states = Array((k - 1) * HALF_DIGEST_LEN)
         right0 = Array(DIGEST_LEN)
@@ -29,7 +30,7 @@ def _iterate_hash_const_tweaked(input, k, pk_seed, adrs0, adrs1_start, output):
         right0[5] = 0
         right0[6] = 0
         right0[7] = 0
-        adrs_compress(pk_seed, adrs0, adrs1_start, right0, states)
+        adrs_compress_hcl(pk_seed_offset, adrs0, adrs1_start, right0, states)
         for j in unroll(1, k - 1):
             right_j = Array(DIGEST_LEN)
             copy_4(states + (j - 1) * HALF_DIGEST_LEN, right_j)
@@ -37,33 +38,33 @@ def _iterate_hash_const_tweaked(input, k, pk_seed, adrs0, adrs1_start, output):
             right_j[5] = 0
             right_j[6] = 0
             right_j[7] = 0
-            adrs_compress(pk_seed, adrs0, adrs1_start + j * (2 ** ADRS1_HASH_SHIFT), right_j, states + j * HALF_DIGEST_LEN)
+            adrs_compress_hcl(pk_seed_offset, adrs0, adrs1_start + j * (2 ** ADRS1_HASH_SHIFT), right_j, states + j * HALF_DIGEST_LEN)
         right_last = Array(DIGEST_LEN)
         copy_4(states + (k - 2) * HALF_DIGEST_LEN, right_last)
         right_last[4] = 0
         right_last[5] = 0
         right_last[6] = 0
         right_last[7] = 0
-        adrs_compress(pk_seed, adrs0, adrs1_start + (k - 1) * (2 ** ADRS1_HASH_SHIFT), right_last, output)
+        adrs_compress_hcl(pk_seed_offset, adrs0, adrs1_start + (k - 1) * (2 ** ADRS1_HASH_SHIFT), right_last, output)
     return
 
 
 @inline
-def iterate_hash_single(input, n, pk_seed, adrs0, kp_adrs1, chain_i, output):
+def iterate_hash_single(input, n, pk_seed_offset, adrs0, kp_adrs1, chain_i, output):
     # Complete one WOTS+ chain: apply (SPX_WOTS_W - 1 - n) further hash steps.
     # n = encoding[chain_i] (the raw signing index, already hashed that many times).
     # chain_i is compile-time (from unroll), so adrs1_start inside the lambda is compile-time.
     debug_assert(n < SPX_WOTS_W)
     match_range(n, range(0, SPX_WOTS_W),
         lambda k: _iterate_hash_const_tweaked(
-            input, (SPX_WOTS_W - 1) - k, pk_seed, adrs0,
+            input, (SPX_WOTS_W - 1) - k, pk_seed_offset, adrs0,
             kp_adrs1 + chain_i * (2 ** ADRS1_CHAIN_SHIFT) + k * (2 ** ADRS1_HASH_SHIFT),
             output))
     return
 
 
 @inline
-def wots_encode_and_complete(message, adrs0, adrs1, randomness, chain_tips, pk_seed, wots_pk_adrs0, wots_pk_adrs1, wots_pubkey):
+def wots_encode_and_complete(message, adrs0, adrs1, randomness, chain_tips, pk_seed_offset, wots_pk_adrs0, wots_pk_adrs1, wots_pubkey):
     # Recover the WOTS+ public key from a message, ADRS values, randomness, and chain tips.
     #
     # Steps:
@@ -80,7 +81,7 @@ def wots_encode_and_complete(message, adrs0, adrs1, randomness, chain_tips, pk_s
     #   adrs1         — scalar: kp_addr (chain=0, hash=0)         — compile-time at all call sites
     #   randomness    — RANDOMNESS_LEN+2 (8) FEs: [r0..r5, adrs0, adrs1]
     #   chain_tips    — SPX_WOTS_LEN * HALF_DIGEST_LEN (128) FEs
-    #   pk_seed       — pointer to HALF_DIGEST_LEN (4) FEs
+    #   pk_seed_offset — compile-time constant: address of this signer's pk_seed in the pk_seed table
     #   wots_pk_adrs0 — scalar: WOTS_PK adrs0 — compile-time
     #   wots_pk_adrs1 — scalar: kp_addr (chain=0, hash=0) — compile-time
     # Output:
@@ -112,7 +113,7 @@ def wots_encode_and_complete(message, adrs0, adrs1, randomness, chain_tips, pk_s
     chain_ends = Array(SPX_WOTS_LEN * HALF_DIGEST_LEN)
     for i in unroll(0, SPX_WOTS_LEN):
         iterate_hash_single(chain_tips + i * HALF_DIGEST_LEN, encoding[i],
-                            pk_seed, adrs0, adrs1, i, chain_ends + i * HALF_DIGEST_LEN)
+                            pk_seed_offset, adrs0, adrs1, i, chain_ends + i * HALF_DIGEST_LEN)
 
     target_sum: Mut = encoding[0]
     for i in unroll(1, SPX_WOTS_LEN):
@@ -120,5 +121,5 @@ def wots_encode_and_complete(message, adrs0, adrs1, randomness, chain_tips, pk_s
     assert target_sum == TARGET_SUM
 
     # Step 4: fold 32 chain-end HalfDigests into wots_pubkey with WOTS_PK tweak.
-    fold_wots_pubkey(pk_seed, wots_pk_adrs0, wots_pk_adrs1, chain_ends, wots_pubkey)
+    fold_wots_pubkey(pk_seed_offset, wots_pk_adrs0, wots_pk_adrs1, chain_ends, wots_pubkey)
     return

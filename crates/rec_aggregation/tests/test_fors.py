@@ -6,8 +6,8 @@ from ..zkdsl_implem.utils import *
 def main():
     build_preamble_memory()
 
-    pk_seed = Array(HALF_DIGEST_LEN)
-    hint_witness("pk_seed", pk_seed)
+    pk_seed_slot: Mut = PK_SEED_TABLE_ADDR
+    hint_witness("pk_seed", pk_seed_slot)
 
     leaf_index_arr = Array(SPX_FORS_TREES)
     hint_witness("leaf_index", leaf_index_arr)
@@ -16,7 +16,7 @@ def main():
     hint_witness("expected_root", expected_root)
 
     out = Array(HALF_DIGEST_LEN)
-    fors_verify(pk_seed, leaf_index_arr, out)
+    fors_verify(PK_SEED_TABLE_ADDR, leaf_index_arr, out)
 
     for i in unroll(0, HALF_DIGEST_LEN):
         assert expected_root[i] == out[i]

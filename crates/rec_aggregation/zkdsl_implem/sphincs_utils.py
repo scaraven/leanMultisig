@@ -44,92 +44,26 @@ ADRS1_TREE_HT_SHIFT = SPX_FORS_HEIGHT  # 15
 MERKLE_LEVEL_STEP = 5 # number of Merkle levels processed by do_3_merkle_level; must divide SPX_FORS_HEIGHT
 
 @inline
-def adrs_compress(pk_seed, adrs0, adrs1, data_right, out):
-    # Tweaked Poseidon16 compression: left = [pk_seed[0..4] | adrs0, adrs1, 0, 0].
-    # Uses poseidon16_compress_half so only the first 4 output FEs (the HalfDigest) are constrained.
+def adrs_compress_hcl(pk_seed_offset, adrs0, adrs1, data_right, out):
+    # Tweaked Poseidon16 compression using poseidon16_compress_half_hardcoded_left.
+    # The first 4 FEs of the left input (pk_seed) are read directly from memory[pk_seed_offset..pk_seed_offset+4]
+    # at the AIR level — no copy needed.
     #
-    # pk_seed    — pointer to HALF_DIGEST_LEN (4) FEs: per-signer public seed
-    # adrs0      — scalar: packed layer/type/tree_address field element
-    # adrs1      — scalar: packed positional fields (kp_addr / chain / hash or tree_height / tree_index)
-    # data_right — pointer to DIGEST_LEN (8) FEs: right half of the Poseidon input
-    # out        — pointer to HALF_DIGEST_LEN (4) FEs: first 4 FEs of Poseidon output (HalfDigest)
-    left = Array(DIGEST_LEN)
-    copy_4(pk_seed, left)
-    left[4] = adrs0
-    left[5] = adrs1
-    left[6] = 0
-    left[7] = 0
-    poseidon16_compress_half(left, data_right, out)
+    # pk_seed_offset — compile-time constant: address of this signer's pk_seed in the pk_seed table
+    # adrs0          — scalar: packed layer/type/tree_address field element
+    # adrs1          — scalar: packed positional fields (kp_addr / chain / hash or tree_height / tree_index)
+    # data_right     — pointer to DIGEST_LEN (8) FEs: right half of the Poseidon input
+    # out            — pointer to HALF_DIGEST_LEN (4) FEs: first 4 FEs of Poseidon output (HalfDigest)
+    left_adrs = Array(HALF_DIGEST_LEN)
+    left_adrs[0] = adrs0
+    left_adrs[1] = adrs1
+    left_adrs[2] = 0
+    left_adrs[3] = 0
+    poseidon16_compress_half_hardcoded_left(left_adrs, data_right, out, pk_seed_offset)
     return
 
 @inline
-def do_1_merkle_level(bit, state_in, sibling, out):
-    match_range(bit, range(0, 2), lambda b: do_1_merkel_level_const(b, state_in, sibling, out))
-    return
-
-@inline
-def do_1_merkel_level_const(bit, state_in, sibling, out):
-    if bit == 0:
-        poseidon16_compress(state_in, sibling, out)
-    else:
-        poseidon16_compress(sibling, state_in, out)
-    return
-
-@inline
-def do_5_merkle_level(k, state_in, sibling, out):
-    match_range(k, range(0, 2**MERKLE_LEVEL_STEP), lambda k_prime: do_5_merkle_level_const(k_prime, state_in, sibling, out))
-    return
-
-@inline
-def do_5_merkle_level_const(k, state_in, sibling, state_out):
-    # Advance MERKLE_LEVEL_STEP levels of the Merkle tree given a compile-time index k.
-    #
-    # Inputs:
-    #   k         — compile-time integer in [0, 2^MERKLE_LEVEL_STEP); bits extracted via (k // 2^i) % 2
-    #   state_in  — DIGEST_LEN FEs: hash of the current node
-    #   sibling   — MERKLE_LEVEL_STEP * DIGEST_LEN FEs: sibling hashes for each level
-    # Output:
-    #   state_out — DIGEST_LEN FEs: computed node after MERKLE_LEVEL_STEP Poseidon compressions
-    b0 = k % 2
-    b0r = (k - b0) / 2
-    b1 = b0r % 2
-    b1r = (b0r - b1) / 2
-    b2 = b1r % 2
-    b2r = (b1r - b2) / 2
-    b3 = b2r % 2
-    b3r = (b2r - b3) / 2
-    b4 = b3r % 2
-
-    intermediate_states = Array((MERKLE_LEVEL_STEP - 1) * DIGEST_LEN)
-    if b0 == 0:
-        poseidon16_compress(state_in, sibling, intermediate_states)
-    else:
-        poseidon16_compress(sibling, state_in, intermediate_states)
-
-    if b1 == 0:
-        poseidon16_compress(intermediate_states, sibling + DIGEST_LEN, intermediate_states + DIGEST_LEN)
-    else:
-        poseidon16_compress(sibling + DIGEST_LEN, intermediate_states, intermediate_states + DIGEST_LEN)
-
-    if b2 == 0:
-        poseidon16_compress(intermediate_states + DIGEST_LEN, sibling + 2 * DIGEST_LEN, intermediate_states + 2 * DIGEST_LEN)
-    else:
-        poseidon16_compress(sibling + 2 * DIGEST_LEN, intermediate_states + DIGEST_LEN, intermediate_states + 2 * DIGEST_LEN)
-
-    if b3 == 0:
-        poseidon16_compress(intermediate_states + 2 * DIGEST_LEN, sibling + 3 * DIGEST_LEN, intermediate_states + 3 * DIGEST_LEN)
-    else:
-        poseidon16_compress(sibling + 3 * DIGEST_LEN, intermediate_states + 2 * DIGEST_LEN, intermediate_states + 3 * DIGEST_LEN)
-
-    if b4 == 0:
-        poseidon16_compress(intermediate_states + 3 * DIGEST_LEN, sibling + 4 * DIGEST_LEN, state_out)
-    else:
-        poseidon16_compress(sibling + 4 * DIGEST_LEN, intermediate_states + 3 * DIGEST_LEN, state_out)
-
-    return
-
-@inline
-def do_5_fors_merkle_level_const(k, pk_seed, tree_index, tree_ht_start, adrs1_ptr, rem_ptr, leaf_index, state_in, sibling, state_out):
+def do_5_fors_merkle_level_const(k, pk_seed_offset, tree_index, tree_ht_start, adrs1_ptr, rem_ptr, leaf_index, state_in, sibling, state_out):
     # Advance MERKLE_LEVEL_STEP (5) levels of a FORS Merkle tree with tweaked Poseidon.
     # k, tree_index, tree_ht_start are compile-time; adrs1_ptr, rem_ptr, leaf_index are runtime.
     #
@@ -172,7 +106,7 @@ def do_5_fors_merkle_level_const(k, pk_seed, tree_index, tree_ht_start, adrs1_pt
     else:
         copy_4(sibling, right0)
         copy_4(state_in, right0 + HALF_DIGEST_LEN)
-    adrs_compress(pk_seed, FORS_ADRS0, adrs1_0, right0, intermediate_states)
+    adrs_compress_hcl(pk_seed_offset, FORS_ADRS0, adrs1_0, right0, intermediate_states)
 
     # Level 1: absolute height H1 = tree_ht_start + 2
     H1 = tree_ht_start + 2
@@ -188,7 +122,7 @@ def do_5_fors_merkle_level_const(k, pk_seed, tree_index, tree_ht_start, adrs1_pt
     else:
         copy_4(sibling + HALF_DIGEST_LEN, right1)
         copy_4(intermediate_states, right1 + HALF_DIGEST_LEN)
-    adrs_compress(pk_seed, FORS_ADRS0, adrs1_1, right1, intermediate_states + HALF_DIGEST_LEN)
+    adrs_compress_hcl(pk_seed_offset, FORS_ADRS0, adrs1_1, right1, intermediate_states + HALF_DIGEST_LEN)
 
     # Level 2: absolute height H2 = tree_ht_start + 3
     H2 = tree_ht_start + 3
@@ -204,7 +138,7 @@ def do_5_fors_merkle_level_const(k, pk_seed, tree_index, tree_ht_start, adrs1_pt
     else:
         copy_4(sibling + 2 * HALF_DIGEST_LEN, right2)
         copy_4(intermediate_states + HALF_DIGEST_LEN, right2 + HALF_DIGEST_LEN)
-    adrs_compress(pk_seed, FORS_ADRS0, adrs1_2, right2, intermediate_states + 2 * HALF_DIGEST_LEN)
+    adrs_compress_hcl(pk_seed_offset, FORS_ADRS0, adrs1_2, right2, intermediate_states + 2 * HALF_DIGEST_LEN)
 
     # Level 3: absolute height H3 = tree_ht_start + 4
     H3 = tree_ht_start + 4
@@ -220,7 +154,7 @@ def do_5_fors_merkle_level_const(k, pk_seed, tree_index, tree_ht_start, adrs1_pt
     else:
         copy_4(sibling + 3 * HALF_DIGEST_LEN, right3)
         copy_4(intermediate_states + 2 * HALF_DIGEST_LEN, right3 + HALF_DIGEST_LEN)
-    adrs_compress(pk_seed, FORS_ADRS0, adrs1_3, right3, intermediate_states + 3 * HALF_DIGEST_LEN)
+    adrs_compress_hcl(pk_seed_offset, FORS_ADRS0, adrs1_3, right3, intermediate_states + 3 * HALF_DIGEST_LEN)
 
     # Level 4: absolute height H4 = tree_ht_start + 5
     H4 = tree_ht_start + 5
@@ -236,18 +170,18 @@ def do_5_fors_merkle_level_const(k, pk_seed, tree_index, tree_ht_start, adrs1_pt
     else:
         copy_4(sibling + 4 * HALF_DIGEST_LEN, right4)
         copy_4(intermediate_states + 3 * HALF_DIGEST_LEN, right4 + HALF_DIGEST_LEN)
-    adrs_compress(pk_seed, FORS_ADRS0, adrs1_4, right4, state_out)
+    adrs_compress_hcl(pk_seed_offset, FORS_ADRS0, adrs1_4, right4, state_out)
     return
 
 
 @inline
-def do_5_fors_merkle_level(k, pk_seed, tree_index, tree_ht_start, adrs1_ptr, rem_ptr, leaf_index, state_in, sibling, state_out):
-    match_range(k, range(0, 2**MERKLE_LEVEL_STEP), lambda k_prime: do_5_fors_merkle_level_const(k_prime, pk_seed, tree_index, tree_ht_start, adrs1_ptr, rem_ptr, leaf_index, state_in, sibling, state_out))
+def do_5_fors_merkle_level(k, pk_seed_offset, tree_index, tree_ht_start, adrs1_ptr, rem_ptr, leaf_index, state_in, sibling, state_out):
+    match_range(k, range(0, 2**MERKLE_LEVEL_STEP), lambda k_prime: do_5_fors_merkle_level_const(k_prime, pk_seed_offset, tree_index, tree_ht_start, adrs1_ptr, rem_ptr, leaf_index, state_in, sibling, state_out))
     return
 
 
 @inline
-def do_5_hypertree_merkle_level_const(k, pk_seed, tree_adrs0, tree_ht_start,
+def do_5_hypertree_merkle_level_const(k, pk_seed_offset, tree_adrs0, tree_ht_start,
                                        adrs1_ptr, rem_ptr, leaf_index,
                                        state_in, sibling, state_out):
     # Advance MERKLE_LEVEL_STEP (5) levels of an XMSS hypertree Merkle tree with tweaked Poseidon.
@@ -283,7 +217,7 @@ def do_5_hypertree_merkle_level_const(k, pk_seed, tree_adrs0, tree_ht_start,
     else:
         copy_4(sibling, right0)
         copy_4(state_in, right0 + HALF_DIGEST_LEN)
-    adrs_compress(pk_seed, tree_adrs0, adrs1_0, right0, intermediate_states)
+    adrs_compress_hcl(pk_seed_offset, tree_adrs0, adrs1_0, right0, intermediate_states)
 
     # Level 1: absolute height H1 = tree_ht_start + 2
     H1 = tree_ht_start + 2
@@ -299,7 +233,7 @@ def do_5_hypertree_merkle_level_const(k, pk_seed, tree_adrs0, tree_ht_start,
     else:
         copy_4(sibling + HALF_DIGEST_LEN, right1)
         copy_4(intermediate_states, right1 + HALF_DIGEST_LEN)
-    adrs_compress(pk_seed, tree_adrs0, adrs1_1, right1, intermediate_states + HALF_DIGEST_LEN)
+    adrs_compress_hcl(pk_seed_offset, tree_adrs0, adrs1_1, right1, intermediate_states + HALF_DIGEST_LEN)
 
     # Level 2: absolute height H2 = tree_ht_start + 3
     H2 = tree_ht_start + 3
@@ -315,7 +249,7 @@ def do_5_hypertree_merkle_level_const(k, pk_seed, tree_adrs0, tree_ht_start,
     else:
         copy_4(sibling + 2 * HALF_DIGEST_LEN, right2)
         copy_4(intermediate_states + HALF_DIGEST_LEN, right2 + HALF_DIGEST_LEN)
-    adrs_compress(pk_seed, tree_adrs0, adrs1_2, right2, intermediate_states + 2 * HALF_DIGEST_LEN)
+    adrs_compress_hcl(pk_seed_offset, tree_adrs0, adrs1_2, right2, intermediate_states + 2 * HALF_DIGEST_LEN)
 
     # Level 3: absolute height H3 = tree_ht_start + 4
     H3 = tree_ht_start + 4
@@ -331,7 +265,7 @@ def do_5_hypertree_merkle_level_const(k, pk_seed, tree_adrs0, tree_ht_start,
     else:
         copy_4(sibling + 3 * HALF_DIGEST_LEN, right3)
         copy_4(intermediate_states + 2 * HALF_DIGEST_LEN, right3 + HALF_DIGEST_LEN)
-    adrs_compress(pk_seed, tree_adrs0, adrs1_3, right3, intermediate_states + 3 * HALF_DIGEST_LEN)
+    adrs_compress_hcl(pk_seed_offset, tree_adrs0, adrs1_3, right3, intermediate_states + 3 * HALF_DIGEST_LEN)
 
     # Level 4: absolute height H4 = tree_ht_start + 5
     H4 = tree_ht_start + 5
@@ -347,32 +281,32 @@ def do_5_hypertree_merkle_level_const(k, pk_seed, tree_adrs0, tree_ht_start,
     else:
         copy_4(sibling + 4 * HALF_DIGEST_LEN, right4)
         copy_4(intermediate_states + 3 * HALF_DIGEST_LEN, right4 + HALF_DIGEST_LEN)
-    adrs_compress(pk_seed, tree_adrs0, adrs1_4, right4, state_out)
+    adrs_compress_hcl(pk_seed_offset, tree_adrs0, adrs1_4, right4, state_out)
     return
 
 
 @inline
-def do_5_hypertree_merkle_level(k, pk_seed, tree_adrs0, tree_ht_start,
+def do_5_hypertree_merkle_level(k, pk_seed_offset, tree_adrs0, tree_ht_start,
                                  adrs1_ptr, rem_ptr, leaf_index,
                                  state_in, sibling, state_out):
     match_range(k, range(0, 2**MERKLE_LEVEL_STEP),
-        lambda k_prime: do_5_hypertree_merkle_level_const(k_prime, pk_seed, tree_adrs0,
+        lambda k_prime: do_5_hypertree_merkle_level_const(k_prime, pk_seed_offset, tree_adrs0,
                                                            tree_ht_start, adrs1_ptr, rem_ptr, leaf_index,
                                                            state_in, sibling, state_out))
     return
 
 
 @inline
-def fold_wots_pubkey(pk_seed, adrs0, adrs1, chain_pub_keys, out):
+def fold_wots_pubkey(pk_seed_offset, adrs0, adrs1, chain_pub_keys, out):
     # Fold SPX_WOTS_LEN (32) completed chain tips into a single WOTS+ public key digest.
     # Matches WotsPublicKey::hash() in wots.rs — tweaked left-fold:
     #   left  = [pk_seed[0..4] | adrs0, adrs1, 0, 0]   (constant across all steps)
     #   right = [acc[0..4] | next_tip[0..4]]
     # adrs0/adrs1 encode Adrs::wots_pk(layer, tree_addr, kp_addr) — compile-time constants at all call sites.
-    # Costs 31 adrs_compress calls.
+    # Costs 31 adrs_compress_hcl calls.
     #
     # Inputs:
-    #   pk_seed        — pointer to HALF_DIGEST_LEN (4) FEs: per-signer public seed
+    #   pk_seed_offset — compile-time constant: address of this signer's pk_seed in the pk_seed table
     #   adrs0          — scalar: packed layer/type/tree_address (WOTS_PK type)
     #   adrs1          — scalar: kp_addr (chain=0, hash=0)
     #   chain_pub_keys — SPX_WOTS_LEN * HALF_DIGEST_LEN FEs: completed chain-end HalfDigests
@@ -383,34 +317,34 @@ def fold_wots_pubkey(pk_seed, adrs0, adrs1, chain_pub_keys, out):
     right0 = Array(DIGEST_LEN)
     copy_4(chain_pub_keys, right0)
     copy_4(chain_pub_keys + HALF_DIGEST_LEN, right0 + HALF_DIGEST_LEN)
-    adrs_compress(pk_seed, adrs0, adrs1, right0, states)
+    adrs_compress_hcl(pk_seed_offset, adrs0, adrs1, right0, states)
 
     for i in unroll(1, SPX_WOTS_LEN - 2):
         right_i = Array(DIGEST_LEN)
         copy_4(states + (i - 1) * HALF_DIGEST_LEN, right_i)
         copy_4(chain_pub_keys + (i + 1) * HALF_DIGEST_LEN, right_i + HALF_DIGEST_LEN)
-        adrs_compress(pk_seed, adrs0, adrs1, right_i, states + i * HALF_DIGEST_LEN)
+        adrs_compress_hcl(pk_seed_offset, adrs0, adrs1, right_i, states + i * HALF_DIGEST_LEN)
 
     right_last = Array(DIGEST_LEN)
     copy_4(states + (SPX_WOTS_LEN - 3) * HALF_DIGEST_LEN, right_last)
     copy_4(chain_pub_keys + (SPX_WOTS_LEN - 1) * HALF_DIGEST_LEN, right_last + HALF_DIGEST_LEN)
-    adrs_compress(pk_seed, adrs0, adrs1, right_last, out)
+    adrs_compress_hcl(pk_seed_offset, adrs0, adrs1, right_last, out)
     return
 
 @inline
-def fold_roots(pk_seed, roots, out):
+def fold_roots(pk_seed_offset, roots, out):
     # Fold SPX_FORS_TREES (9) FORS tree roots into the FORS public key digest.
     # Tweaked left-fold matching fors.rs::fold_roots:
     #   adrs0 = pack(layer=0, type=FORS_ROOTS, tree_addr=0)  — constant across all steps
     #   adrs1 = i                                              — step index (kp_addr field)
     #   right = [acc[0..4] | next_root[0..4]]
-    # Costs 8 adrs_compress calls.
+    # Costs 8 adrs_compress_hcl calls.
     #
     # Inputs:
-    #   pk_seed — pointer to HALF_DIGEST_LEN (4) FEs: per-signer public seed
-    #   roots   — SPX_FORS_TREES * HALF_DIGEST_LEN FEs: one HalfDigest root per FORS tree
+    #   pk_seed_offset — compile-time constant: address of this signer's pk_seed in the pk_seed table
+    #   roots          — SPX_FORS_TREES * HALF_DIGEST_LEN FEs: one HalfDigest root per FORS tree
     # Output:
-    #   out     — HALF_DIGEST_LEN (4) FEs: FORS public key hash
+    #   out            — HALF_DIGEST_LEN (4) FEs: FORS public key hash
     FORS_ROOTS_ADRS0 = ADRS_FORS_ROOTS * (2 ** ADRS0_TYPE_SHIFT)  # layer=0, type=4, tree_addr=0 → 16
 
     states = Array((SPX_FORS_TREES - 2) * HALF_DIGEST_LEN)
@@ -418,16 +352,16 @@ def fold_roots(pk_seed, roots, out):
     right0 = Array(DIGEST_LEN)
     copy_4(roots, right0)
     copy_4(roots + HALF_DIGEST_LEN, right0 + HALF_DIGEST_LEN)
-    adrs_compress(pk_seed, FORS_ROOTS_ADRS0, 0, right0, states)
+    adrs_compress_hcl(pk_seed_offset, FORS_ROOTS_ADRS0, 0, right0, states)
 
     for i in unroll(1, SPX_FORS_TREES - 2):
         right_i = Array(DIGEST_LEN)
         copy_4(states + (i - 1) * HALF_DIGEST_LEN, right_i)
         copy_4(roots + (i + 1) * HALF_DIGEST_LEN, right_i + HALF_DIGEST_LEN)
-        adrs_compress(pk_seed, FORS_ROOTS_ADRS0, i, right_i, states + i * HALF_DIGEST_LEN)
+        adrs_compress_hcl(pk_seed_offset, FORS_ROOTS_ADRS0, i, right_i, states + i * HALF_DIGEST_LEN)
 
     right_last = Array(DIGEST_LEN)
     copy_4(states + (SPX_FORS_TREES - 3) * HALF_DIGEST_LEN, right_last)
     copy_4(roots + (SPX_FORS_TREES - 1) * HALF_DIGEST_LEN, right_last + HALF_DIGEST_LEN)
-    adrs_compress(pk_seed, FORS_ROOTS_ADRS0, SPX_FORS_TREES - 2, right_last, out)
+    adrs_compress_hcl(pk_seed_offset, FORS_ROOTS_ADRS0, SPX_FORS_TREES - 2, right_last, out)
     return

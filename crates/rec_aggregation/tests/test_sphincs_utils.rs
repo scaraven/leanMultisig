@@ -2,7 +2,7 @@ use backend::PrimeCharacteristicRing;
 use lean_compiler::*;
 use lean_vm::*;
 use rand::{RngExt, SeedableRng, rngs::StdRng};
-use rec_aggregation::{PREAMBLE_MEMORY_LEN, compilation::build_replacements, sphincs::split_leaf_upper};
+use rec_aggregation::{PREAMBLE_MEMORY_LEN_SPHINCS, compilation::build_replacements, sphincs::split_leaf_upper};
 use sphincs::{
     HALF_DIGEST_SIZE, HalfDigest, SPX_D, SPX_FORS_HEIGHT, SPX_FORS_TREES, SPX_TREE_HEIGHT, SPX_WOTS_LEN, SPX_WOTS_W,
     address::Adrs,
@@ -47,7 +47,7 @@ fn test_fold_roots_sphincs() {
             ("expected".to_string(), vec![hash.to_vec()]),
         ]);
         let witness = ExecutionWitness {
-            preamble_memory_len: PREAMBLE_MEMORY_LEN,
+            preamble_memory_len: PREAMBLE_MEMORY_LEN_SPHINCS,
             hints,
         };
         execute_bytecode(&bytecode, &vec![F::from_usize(0); DIGEST_LEN], &witness, false);
@@ -131,7 +131,7 @@ fn test_sphincs_wots_encode_complete() {
                 &expected_pubkey,
             );
             let witness = ExecutionWitness {
-                preamble_memory_len: PREAMBLE_MEMORY_LEN,
+                preamble_memory_len: PREAMBLE_MEMORY_LEN_SPHINCS,
                 hints,
             };
             execute_bytecode(&bytecode, &vec![F::from_usize(0); DIGEST_LEN], &witness, false);
@@ -166,7 +166,7 @@ fn test_sphincs_wots_encode_complete() {
                 &wrong_pubkey,
             );
             let witness = ExecutionWitness {
-                preamble_memory_len: PREAMBLE_MEMORY_LEN,
+                preamble_memory_len: PREAMBLE_MEMORY_LEN_SPHINCS,
                 hints,
             };
             assert!(
@@ -203,7 +203,7 @@ fn test_sphincs_wots_encode_complete() {
                 &fake_pubkey,
             );
             let witness = ExecutionWitness {
-                preamble_memory_len: PREAMBLE_MEMORY_LEN,
+                preamble_memory_len: PREAMBLE_MEMORY_LEN_SPHINCS,
                 hints,
             };
             assert!(
@@ -256,7 +256,7 @@ fn test_sphincs_wots_encode_complete() {
                 &correct_pubkey,
             );
             let witness = ExecutionWitness {
-                preamble_memory_len: PREAMBLE_MEMORY_LEN,
+                preamble_memory_len: PREAMBLE_MEMORY_LEN_SPHINCS,
                 hints,
             };
             assert!(
@@ -295,7 +295,7 @@ fn test_sphincs_fors_merkle_verify() {
             ("expected_root".to_string(), vec![root.to_vec()]),
         ]);
         let witness = ExecutionWitness {
-            preamble_memory_len: PREAMBLE_MEMORY_LEN,
+            preamble_memory_len: PREAMBLE_MEMORY_LEN_SPHINCS,
             hints,
         };
         execute_bytecode(&bytecode, &vec![F::from_usize(0); DIGEST_LEN], &witness, false);
@@ -329,7 +329,7 @@ fn test_sphincs_fors_verify() {
         ]);
 
         let witness = ExecutionWitness {
-            preamble_memory_len: PREAMBLE_MEMORY_LEN,
+            preamble_memory_len: PREAMBLE_MEMORY_LEN_SPHINCS,
             hints,
         };
 
@@ -348,7 +348,7 @@ fn test_sphincs_fors_verify() {
         ]);
 
         let witness_wrong = ExecutionWitness {
-            preamble_memory_len: PREAMBLE_MEMORY_LEN,
+            preamble_memory_len: PREAMBLE_MEMORY_LEN_SPHINCS,
             hints: hints_wrong,
         };
 
@@ -407,7 +407,7 @@ fn test_sphincs_hypertree_merkle_verify() {
             ("expected_root".to_string(), vec![root.to_vec()]),
         ]);
         let witness = ExecutionWitness {
-            preamble_memory_len: PREAMBLE_MEMORY_LEN,
+            preamble_memory_len: PREAMBLE_MEMORY_LEN_SPHINCS,
             hints,
         };
         let profiling_result = execute_bytecode(&bytecode, &vec![F::from_usize(0); DIGEST_LEN], &witness, true);
@@ -466,7 +466,7 @@ fn test_sphincs_hypertree_verify() {
                 ("hypertree_sig".to_string(), vec![sig_flat]),
             ]);
             let witness = ExecutionWitness {
-                preamble_memory_len: PREAMBLE_MEMORY_LEN,
+                preamble_memory_len: PREAMBLE_MEMORY_LEN_SPHINCS,
                 hints,
             };
             execute_bytecode(&bytecode, &vec![F::from_usize(0); DIGEST_LEN], &witness, false);
@@ -517,7 +517,7 @@ fn test_decompose_message_digest() {
             ]);
 
             let witness = ExecutionWitness {
-                preamble_memory_len: PREAMBLE_MEMORY_LEN,
+                preamble_memory_len: PREAMBLE_MEMORY_LEN_SPHINCS,
                 hints,
             };
 
