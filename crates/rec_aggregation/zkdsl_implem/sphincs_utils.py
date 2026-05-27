@@ -72,6 +72,27 @@ def adrs_compress_pair(pk_seed, adrs0, adrs1, right_lo, right_hi, out):
     return
 
 @inline
+def adrs_compress_hrzero(pk_seed, adrs0, adrs1, right_lo, out):
+    # Variant of adrs_compress where right[4..8] = 0 (hardcoded zero suffix).
+    # Uses poseidon16_compress_half_hardcoded_right_zero, which reads only right[0..4]
+    # from memory and implicitly treats right[4..8] as zero.
+    #
+    # Caller requirement: the 4 memory slots immediately after right_lo must be zero
+    # (the write-once model guarantees this when right_lo is a 4-FE HalfDigest allocation).
+    #
+    # left        = [pk_seed[0..4] | adrs0, adrs1, 0, 0]
+    # right[0..4] = right_lo[0..4]
+    # right[4..8] = [0, 0, 0, 0]  (hardcoded)
+    left = Array(DIGEST_LEN)
+    copy_4(pk_seed, left)
+    left[4] = adrs0
+    left[5] = adrs1
+    left[6] = 0
+    left[7] = 0
+    poseidon16_compress_half_hardcoded_right_zero(left, right_lo, out)
+    return
+
+@inline
 def do_5_fors_merkle_level_const(k, pk_seed, tree_index, tree_ht_start, adrs1_ptr, rem_ptr, leaf_index, state_in, sibling, state_out):
     # Advance MERKLE_LEVEL_STEP (5) levels of a FORS Merkle tree with tweaked Poseidon.
     # k, tree_index, tree_ht_start are compile-time; adrs1_ptr, rem_ptr, leaf_index are runtime.

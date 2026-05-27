@@ -70,6 +70,8 @@ pub enum PrecompileCompTimeArgs<S> {
         hardcoded_offset_left: Option<S>,
         // Mutually exclusive with `half_output`.
         permute: bool,
+        // right_input = m[arg_b..arg_b+4] | [0,0,0,0]. Mutually exclusive with `permute`.
+        hardcoded_right_zero: bool,
     },
     ExtensionOp {
         size: S,
@@ -91,10 +93,12 @@ impl<S> PrecompileCompTimeArgs<S> {
                 half_output,
                 hardcoded_offset_left: hardcoded_left_4,
                 permute,
+                hardcoded_right_zero,
             } => PrecompileCompTimeArgs::Poseidon16 {
                 half_output,
                 hardcoded_offset_left: hardcoded_left_4.map(&mut f),
                 permute,
+                hardcoded_right_zero,
             },
             Self::ExtensionOp { size, mode } => PrecompileCompTimeArgs::ExtensionOp { size: f(size), mode },
         }
@@ -138,6 +142,9 @@ pub struct InstructionContext<'a, M: MemoryAccess> {
     pub pcs: &'a Vec<usize>,
     pub traces: &'a mut BTreeMap<Table, TableTrace>,
     pub counts: &'a mut InstructionCounts,
+    /// Address of the program's zero vector (ZERO_VEC_PTR) in VM memory.
+    /// Used by precompiles that need a stable zero-memory region.
+    pub zero_vec_ptr: usize,
 }
 
 impl Instruction {
@@ -258,20 +265,30 @@ impl<V: Display, S: Display> Display for PrecompileArgs<V, S> {
                 half_output,
                 hardcoded_offset_left: hardcoded_left_4,
                 permute,
+                hardcoded_right_zero,
             } => {
                 if *permute {
                     write!(f, "{POSEIDON16_PERMUTE_NAME}({arg_0}, {arg_1}, {res})")
                 } else {
-                    match (*half_output, hardcoded_left_4) {
-                        (false, None) => write!(f, "{POSEIDON16_NAME}({arg_0}, {arg_1}, {res})"),
-                        (true, None) => write!(f, "{POSEIDON16_NAME}({arg_0}, {arg_1}, {res}, half)"),
-                        (false, Some(off)) => {
+                    match (*half_output, hardcoded_left_4, hardcoded_right_zero) {
+                        (false, None, false) => write!(f, "{POSEIDON16_NAME}({arg_0}, {arg_1}, {res})"),
+                        (true, None, false) => write!(f, "{POSEIDON16_NAME}({arg_0}, {arg_1}, {res}, half)"),
+                        (false, Some(off), false) => {
                             write!(f, "{POSEIDON16_NAME}({arg_0}, {arg_1}, {res}, hardcoded_left_4={off})")
                         }
-                        (true, Some(off)) => write!(
+                        (true, Some(off), false) => write!(
                             f,
                             "{POSEIDON16_NAME}({arg_0}, {arg_1}, {res}, half, hardcoded_left_4={off})"
                         ),
+                        (true, None, true) => write!(
+                            f,
+                            "{POSEIDON16_NAME}({arg_0}, {arg_1}, {res}, half, hardcoded_right_zero)"
+                        ),
+                        (true, Some(off), true) => write!(
+                            f,
+                            "{POSEIDON16_NAME}({arg_0}, {arg_1}, {res}, half, hardcoded_left_4={off}, hardcoded_right_zero)"
+                        ),
+                        _ => write!(f, "{POSEIDON16_NAME}({arg_0}, {arg_1}, {res}, [flags])"),
                     }
                 }
             }

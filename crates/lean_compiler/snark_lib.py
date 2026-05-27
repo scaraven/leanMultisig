@@ -89,6 +89,15 @@ def poseidon16_compress_half_hardcoded_left(left, right, output, offset):
     _ = left, right, output, offset
 
 
+def poseidon16_compress_half_hardcoded_right_zero(left, right_lo, output):
+    """Poseidon16 half-output compression where right[4..8] = 0.
+    right[0..4] = m[right_lo..right_lo+4]; right[4..8] = [0,0,0,0].
+    The 4 memory slots at right_lo+4..right_lo+8 must be zero (write-once model guarantees
+    this when right_lo points to a 4-FE HalfDigest at the end of its allocation).
+    Only the first 4 output FEs are constrained (half-output)."""
+    _ = left, right_lo, output
+
+
 def poseidon16_permute(left, right, output):
     """Raw Poseidon1 permutation (no feed-forward). Writes the 16-cell result in natural order:
         m[output .. output + 16] = poseidon(left || right)"""

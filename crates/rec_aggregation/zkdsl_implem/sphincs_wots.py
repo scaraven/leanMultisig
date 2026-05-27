@@ -7,20 +7,21 @@ def _iterate_hash_const_tweaked(input, k, pk_seed, adrs0, adrs1_start, output):
     # Hash a HalfDigest input for k steps with WOTS_HASH tweak, starting at hash_address = adrs1_start.
     # adrs0, adrs1_start, and k are all compile-time constants at every call site.
     #
-    # Each step j: right = [input[0..4] | 0,0,0,0], then adrs_compress with adrs1 advancing by 2**ADRS1_HASH_SHIFT.
+    # Each step j: right = [input[0..4] | 0,0,0,0] via adrs_compress_hrzero (hardcoded right zero suffix).
+    # adrs1 advances by 2**ADRS1_HASH_SHIFT per step.
     #
-    # input  — pointer to HALF_DIGEST_LEN (4) FEs
+    # input  — pointer to HALF_DIGEST_LEN (4) FEs (4 slots immediately after must be zero)
     # output — pointer to HALF_DIGEST_LEN (4) FEs
     if k == 0:
         copy_4(input, output)
     elif k == 1:
-        adrs_compress_pair(pk_seed, adrs0, adrs1_start, input, ZERO_VEC_PTR, output)
+        adrs_compress_hrzero(pk_seed, adrs0, adrs1_start, input, output)
     else:
         states = Array((k - 1) * HALF_DIGEST_LEN)
-        adrs_compress_pair(pk_seed, adrs0, adrs1_start, input, ZERO_VEC_PTR, states)
+        adrs_compress_hrzero(pk_seed, adrs0, adrs1_start, input, states)
         for j in unroll(1, k - 1):
-            adrs_compress_pair(pk_seed, adrs0, adrs1_start + j * (2 ** ADRS1_HASH_SHIFT), states + (j - 1) * HALF_DIGEST_LEN, ZERO_VEC_PTR, states + j * HALF_DIGEST_LEN)
-        adrs_compress_pair(pk_seed, adrs0, adrs1_start + (k - 1) * (2 ** ADRS1_HASH_SHIFT), states + (k - 2) * HALF_DIGEST_LEN, ZERO_VEC_PTR, output)
+            adrs_compress_hrzero(pk_seed, adrs0, adrs1_start + j * (2 ** ADRS1_HASH_SHIFT), states + (j - 1) * HALF_DIGEST_LEN, states + j * HALF_DIGEST_LEN)
+        adrs_compress_hrzero(pk_seed, adrs0, adrs1_start + (k - 1) * (2 ** ADRS1_HASH_SHIFT), states + (k - 2) * HALF_DIGEST_LEN, output)
     return
 
 
