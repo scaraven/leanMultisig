@@ -14,37 +14,13 @@ def _iterate_hash_const_tweaked(input, k, pk_seed, adrs0, adrs1_start, output):
     if k == 0:
         copy_4(input, output)
     elif k == 1:
-        right = Array(DIGEST_LEN)
-        copy_4(input, right)
-        right[4] = 0
-        right[5] = 0
-        right[6] = 0
-        right[7] = 0
-        adrs_compress(pk_seed, adrs0, adrs1_start, right, output)
+        adrs_compress_pair(pk_seed, adrs0, adrs1_start, input, ZERO_VEC_PTR, output)
     else:
         states = Array((k - 1) * HALF_DIGEST_LEN)
-        right0 = Array(DIGEST_LEN)
-        copy_4(input, right0)
-        right0[4] = 0
-        right0[5] = 0
-        right0[6] = 0
-        right0[7] = 0
-        adrs_compress(pk_seed, adrs0, adrs1_start, right0, states)
+        adrs_compress_pair(pk_seed, adrs0, adrs1_start, input, ZERO_VEC_PTR, states)
         for j in unroll(1, k - 1):
-            right_j = Array(DIGEST_LEN)
-            copy_4(states + (j - 1) * HALF_DIGEST_LEN, right_j)
-            right_j[4] = 0
-            right_j[5] = 0
-            right_j[6] = 0
-            right_j[7] = 0
-            adrs_compress(pk_seed, adrs0, adrs1_start + j * (2 ** ADRS1_HASH_SHIFT), right_j, states + j * HALF_DIGEST_LEN)
-        right_last = Array(DIGEST_LEN)
-        copy_4(states + (k - 2) * HALF_DIGEST_LEN, right_last)
-        right_last[4] = 0
-        right_last[5] = 0
-        right_last[6] = 0
-        right_last[7] = 0
-        adrs_compress(pk_seed, adrs0, adrs1_start + (k - 1) * (2 ** ADRS1_HASH_SHIFT), right_last, output)
+            adrs_compress_pair(pk_seed, adrs0, adrs1_start + j * (2 ** ADRS1_HASH_SHIFT), states + (j - 1) * HALF_DIGEST_LEN, ZERO_VEC_PTR, states + j * HALF_DIGEST_LEN)
+        adrs_compress_pair(pk_seed, adrs0, adrs1_start + (k - 1) * (2 ** ADRS1_HASH_SHIFT), states + (k - 2) * HALF_DIGEST_LEN, ZERO_VEC_PTR, output)
     return
 
 

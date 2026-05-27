@@ -47,15 +47,11 @@ def hypertree_merkle_verify(pk_seed, tree_adrs0, layer_leaf_index, leaf_node, au
     assert rem_buf0[0] < 2
     assert layer_leaf_index == (adrs1_buf0[0] - 1 * (2 ** ADRS1_TREE_HT_SHIFT)) * 2 + rem_buf0[0]
 
-    right0 = Array(DIGEST_LEN)
-    if bit0[0] == 0:
-        copy_4(leaf_node, right0)
-        copy_4(auth_path, right0 + HALF_DIGEST_LEN)
-    else:
-        copy_4(auth_path, right0)
-        copy_4(leaf_node, right0 + HALF_DIGEST_LEN)
     after_bit0 = Array(HALF_DIGEST_LEN)
-    adrs_compress(pk_seed, tree_adrs0, adrs1_buf0[0], right0, after_bit0)
+    if bit0[0] == 0:
+        adrs_compress_pair(pk_seed, tree_adrs0, adrs1_buf0[0], leaf_node, auth_path, after_bit0)
+    else:
+        adrs_compress_pair(pk_seed, tree_adrs0, adrs1_buf0[0], auth_path, leaf_node, after_bit0)
 
     # Levels 1–5 (tree_ht_start=1): five tweaked levels via do_5_hypertree_merkle_level.
     adrs1_chunk0 = Array(MERKLE_LEVEL_STEP)
@@ -109,10 +105,7 @@ def hypertree_verify(pk_seed, fors_pubkey, layer_leaf_indices, expected_pk):
     # Layer 0 message: half_to_full(fors_pubkey) = [fors_pubkey | 0,0,0,0].
     msg_0 = Array(DIGEST_LEN)
     copy_4(fors_pubkey, msg_0)
-    msg_0[4] = 0
-    msg_0[5] = 0
-    msg_0[6] = 0
-    msg_0[7] = 0
+    set_to_4_zeros(msg_0 + 4)
 
     # Per-layer layout: randomness(6) | adrs0(1) | adrs1(1) | chain_tips(128) | auth_path(44) = 180 FEs.
     layer_stride = RANDOMNESS_LEN + 2 + (SPX_WOTS_LEN + SPX_TREE_HEIGHT) * HALF_DIGEST_LEN
@@ -138,10 +131,7 @@ def hypertree_verify(pk_seed, fors_pubkey, layer_leaf_indices, expected_pk):
 
     msg_1 = Array(DIGEST_LEN)
     copy_4(layer_root_0, msg_1)
-    msg_1[4] = 0
-    msg_1[5] = 0
-    msg_1[6] = 0
-    msg_1[7] = 0
+    set_to_4_zeros(msg_1 + 4)
 
     # --- Layer 1 ---
     randomness_ptr_1 = hypertree_sig + layer_stride
@@ -164,10 +154,7 @@ def hypertree_verify(pk_seed, fors_pubkey, layer_leaf_indices, expected_pk):
 
     msg_2 = Array(DIGEST_LEN)
     copy_4(layer_root_1, msg_2)
-    msg_2[4] = 0
-    msg_2[5] = 0
-    msg_2[6] = 0
-    msg_2[7] = 0
+    set_to_4_zeros(msg_2 + 4)
 
     # --- Layer 2 (final): tree_address is always 0 ---
     randomness_ptr_2 = hypertree_sig + 2 * layer_stride

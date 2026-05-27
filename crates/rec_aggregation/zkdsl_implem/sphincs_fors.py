@@ -13,14 +13,8 @@ def _fors_merkle_verify_const(tree_index, pk_seed, leaf_index, leaf_secret, auth
     debug_assert(leaf_index < 2**SPX_FORS_HEIGHT)
 
     FORS_LEAF_ADRS0 = ADRS_FORS_TREE * (2 ** ADRS0_TYPE_SHIFT) + tree_index * (2 ** ADRS0_TREE_SHIFT)
-    leaf_right = Array(DIGEST_LEN)
-    copy_4(leaf_secret, leaf_right)
-    leaf_right[4] = 0
-    leaf_right[5] = 0
-    leaf_right[6] = 0
-    leaf_right[7] = 0
     leaf_node = Array(HALF_DIGEST_LEN)
-    adrs_compress(pk_seed, FORS_LEAF_ADRS0, leaf_index, leaf_right, leaf_node)
+    adrs_compress_pair(pk_seed, FORS_LEAF_ADRS0, leaf_index, leaf_secret, ZERO_VEC_PTR, leaf_node)
 
     N_GROUPS = SPX_FORS_HEIGHT / MERKLE_LEVEL_STEP
 
