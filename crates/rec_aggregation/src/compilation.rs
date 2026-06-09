@@ -96,7 +96,6 @@ fn compile_main_program_self_referential() -> Bytecode {
     panic!("`compile_main_program_self_referential` did not converge");
 }
 
-
 pub fn build_replacements(log_inner_bytecode: usize, bytecode_zero_eval: F) -> BTreeMap<String, String> {
     let ending_pc = (1 << log_inner_bytecode) - 1;
     let min_stacked = min_stacked_n_vars(log_inner_bytecode);

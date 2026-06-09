@@ -1,4 +1,5 @@
 use backend::*;
+use core::fmt;
 use lean_vm::*;
 use serde::{Deserialize, Serialize};
 use sphincs::signers_cache::{NUM_SPHINCS_SIGNERS, get_sphincs_benchmark_signatures, message_for_sphincs_signer};
@@ -51,6 +52,21 @@ fn count_nodes(topology: &AggregationTopology) -> usize {
     1 + topology.children.iter().map(count_nodes).sum::<usize>()
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SigType {
+    Xmss,
+    Sphincs,
+}
+
+impl fmt::Display for SigType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SigType::Xmss => write!(f, "XMSS"),
+            SigType::Sphincs => write!(f, "SPHINCS+"),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NodeStats {
     pub time_secs: f64,
@@ -65,6 +81,7 @@ pub struct NodeStats {
     pub poseidons: usize,
     pub dots: usize,
     pub n_xmss: Option<usize>,
+    pub sig_type: SigType,
 }
 
 fn default_samples() -> usize {
@@ -99,7 +116,7 @@ fn fmt_throughput_col(n: usize, st: &NodeStats) -> String {
     let throughput = n as f64 / st.time_secs;
     format!(
         "{:>w$}",
-        format!("{:.0} XMSS/s - {:.3}s", throughput, st.time_secs),
+        format!("{:.0} {}/s - {:.3}s", throughput, st.sig_type, st.time_secs),
         w = TIME_COL_WIDTH
     )
 }
@@ -440,6 +457,7 @@ fn build_aggregation(
                     poseidons: meta.n_poseidons,
                     dots: meta.n_extension_ops,
                     n_xmss: n_xmss_opt,
+                    sig_type: SigType::Xmss,
                 },
             );
         }
@@ -480,6 +498,7 @@ fn build_aggregation(
         poseidons: meta.n_poseidons,
         dots: meta.n_extension_ops,
         n_xmss: n_xmss_opt,
+        sig_type: SigType::Xmss,
     };
     if !tracing {
         live_tree.update_node(own_display_index, &stats);
@@ -653,6 +672,7 @@ pub fn run_sphincs_benchmark(n_sigs: usize, log_inv_rate: usize, tracing: bool) 
                 poseidons: meta.n_poseidons,
                 dots: meta.n_extension_ops,
                 n_xmss: Some(n_sigs),
+                sig_type: SigType::Sphincs,
             },
         );
     }
