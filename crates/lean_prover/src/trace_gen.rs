@@ -106,6 +106,11 @@ pub fn get_execution_trace(
 
     let ExecutionResult { mut traces, .. } = execution_result;
 
+    {
+        let poseidon_out4_trace = traces.get_mut(&Table::poseidon16_out4()).unwrap();
+        fill_trace_poseidon_16_out4(&mut poseidon_out4_trace.columns);
+    }
+
     let poseidon_trace = traces.get_mut(&Table::poseidon16()).unwrap();
     fill_trace_poseidon_16(&mut poseidon_trace.columns);
 

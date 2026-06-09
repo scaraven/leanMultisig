@@ -4,16 +4,21 @@
 **Goal:** Reduce the logup-GKR cost (§5.8 of `misc/minimal_zkVM.tex`) of short-output
 poseidon calls by giving them their own table whose **result memory lookup is 4 cells**
 instead of the current unconditional **16 cells**.
-**Decisions locked with the user:** Split **by AIR output width** into three poseidon
-tables — out4 (4 cells), out8 (8 cells), and permute (16 cells) — each with a result memory
-lookup matching its true width. Optimise generally across signature schemes.
+**Decisions locked with the user:** Split off **only the 4-cell (out4 / `quarter*`) case**
+into its own poseidon table with a 4-cell result memory lookup. Keep the 8-cell (out8) and
+16-cell (permute) calls together in the **existing** table (result lookup stays 16). Optimise
+generally across signature schemes.
 
-> **Revised after call-site analysis (see §1e).** The earlier "split off the 4-cell case"
-> decision was based on a wrong premise: that almost all calls are 4-FE. Static call-site
-> counts in the XMSS-like zkDSL (`crates/rec_aggregation/zkdsl_implem/*.py`) show the
-> dominant output width is **8 cells**, not 4. The 4-cell (`quarter*`) family is real but
-> secondary. Hence a 3-way split keyed on output width, with the **out8 table** as the
-> high-value target.
+> **Revised twice.** (1) Static call-site counts in the XMSS-like zkDSL
+> (`crates/rec_aggregation/zkdsl_implem/*.py`) show the dominant *static* output width is
+> 8 cells, not 4. (2) **But dynamic execution is dominated by the 4-cell (`quarter*`) case**:
+> Merkle-tree verification performs one hash *per tree layer*, and WOTS performs several hashes
+> *per chain*, and these are the 4-cell calls — multiplied across all signers/layers/chains
+> they dwarf the statically-larger `compress_half`/`permute_half` sites. So the high-value
+> target by *dynamic row count* is **out4**. The decision is therefore to peel **out4** into
+> its own table (4-cell result lookup) and leave out8 + permute in the existing 16-cell table.
+> A future second split (out8 → 8-cell) remains possible but is deferred; isolating out4 is the
+> single-table change with the largest dynamic payoff.
 
 This branch has **no SPHINCS+ implementation**; XMSS (in `rec_aggregation/zkdsl_implem`) is
 the representative workload used for the analysis below.
@@ -154,8 +159,20 @@ exactly: `out4` ⇒ 4, `out8` ⇒ 8, neither ⇒ 16.
 | `permute_half_hardcoded_left` | 1 | 8 |
 
 Bucketed by write width: **8-cell ≈ 42 sites, 4-cell = 11, 16-cell = 8.** The 8-cell case
-dominates. (These are *static* sites; loop/unroll multiplicity will skew dynamic counts —
-see §5 caveat. They suffice to reject the "almost all 4-cell" premise.)
+dominates *statically*.
+
+**But static counts mislead here — dynamic row counts invert the picture.** The 4-cell
+(`quarter*`) calls sit in the hottest loops:
+- **Merkle verification** runs one hash *per tree layer* (`hashing.py:328+`), repeated for
+  every authentication path.
+- **WOTS** runs several hashes *per chain*, across all chains in a signature.
+
+These per-layer / per-chain hashes are the 4-cell calls, and their multiplicity (signers ×
+layers × chains) makes out4 the **dominant table by executed rows**, even though
+`compress_half`/`permute_half` have more *static* call sites. This is why the split peels off
+out4 specifically: it is the highest-multiplicity width. (Static site counts above remain
+useful only for reasoning about the rarer widths; confirm the dynamic populations with an
+instrumented run — see §5.)
 
 ---
 
@@ -167,25 +184,24 @@ this — `bus_interactions()` is built once per table (`poseidon/mod.rs:149`), n
 the result-lookup width cannot vary by row within one table.
 
 Splitting into distinct tables is natively supported: `𝒯` is "the set of all tables"
-(line 818) and `N = Σ_T n_T·H_T` (line 835) sums over however many tables exist. Split into
-**three tables keyed on output width**, each with a result lookup matching its true write
-width:
+(line 818) and `N = Σ_T n_T·H_T` (line 835) sums over however many tables exist. Peel off
+**out4 into its own table**; keep out8 and permute together in the existing table:
 
-| Table | mode (`half_output, permute`) | result lookup | XMSS sites (§1e) | maps to |
+| Table | modes (`half_output, permute`) | result lookup | dominant by | maps to |
 |---|---|---|---|---|
-| `Poseidon16Out4` (new)    | out4 — (true, false)  | **4**  | 11 | lines 600–602 (`n=4`) |
-| `Poseidon16Out8` (new)    | out8 — (false,false) / (true,true) | **8** | ≈42 | line 577 |
-| `Poseidon16Permute` (keep)| 16 — (false, true)    | 16 | 8 | line 584 |
+| `Poseidon16Out4` (new)      | out4 — (true, false)                          | **4**  | **executed rows** (Merkle layers + WOTS chains) | lines 600–602 (`n=4`) |
+| `Poseidon16` (keep, unchanged) | out8 — (false,false)/(true,true) **and** permute — (false,true) | 16 | static sites | lines 577, 584 |
 
-All three run the identical permutation AIR (`eval_poseidon1_16`, `poseidon/mod.rs:386`);
-only the `bus_interactions()` result group width differs (the `DIGEST_LEN * 2` argument at
-`poseidon/mod.rs:178` becomes `HALF_DIGEST_LEN`=4, `DIGEST_LEN`=8, or `DIGEST_LEN*2`=16
-respectively). Per line 835, each call then contributes `width·H_T` instead of `16·H_T`:
+Both tables run the identical permutation AIR (`eval_poseidon1_16`, `poseidon/mod.rs:386`);
+only the new out4 table's `bus_interactions()` result group width differs (the `DIGEST_LEN * 2`
+argument at `poseidon/mod.rs:178` becomes `HALF_DIGEST_LEN` = 4 in the out4 table; the kept
+table stays at `DIGEST_LEN * 2` = 16). Per line 835:
 
-- out8 (the bulk): `8·H_T` instead of `16·H_T` — **halves** the result-lookup cost for the
-  dominant case. This is the primary win.
-- out4: `4·H_T` instead of `16·H_T` — a 12-fraction-per-row saving on its (smaller) table.
-- permute: unchanged at 16 (genuine 16-cell writes), but now isolated to a small table.
+- out4 (the dynamic bulk): `4·H_T` instead of `16·H_T` — a **12-fraction-per-row saving on the
+  highest-multiplicity table**. This is the primary win.
+- out8 + permute (kept table): unchanged at 16. The out8 calls still over-declare (8 written,
+  16 looked up), but they are left as-is in this iteration — a later out8 split could recover
+  another 8→ -saving if its dynamic population justifies a second table past the `2^8` floor.
 
 > **Constraint-gating caveat.** The AIR output constraints (`poseidon/mod.rs:495-512`) gate
 > `out_lo[4..8]` by `(1 - flag_out4)` and `out_hi` by `(1 - flag_out8 - flag_out4)`. When a
@@ -208,36 +224,35 @@ let domainsep_reconstructed = POSEIDON_DOMAINSEP_BASE
     + cols.flag_left    * POSEIDON_FLAG_LEFT_SHIFT
     + cols.flag_left * cols.offset_left * POSEIDON_OFFSET_LEFT_SHIFT;
 ```
-and set identically in the trace (`poseidon/mod.rs:278-283`). Each output mode already carries
-a distinct `domainsep` value (out4 = neither `flag_out8` nor `flag_permute`; out8 = `flag_out8`
-set; permute = `flag_permute` set). The execution table pushes a matching `domainsep`, so
-**routing each mode to its table requires no new bus data** — each table pulls only the
-`domainsep` values for its mode. Injectivity of the `domainsep` encoding (spec lines 618–623)
-carries the soundness argument across the three pull-tables.
+and set identically in the trace (`poseidon/mod.rs:278-283`). out4 carries a distinct
+`domainsep` value (neither `flag_out8` nor `flag_permute` set), so **routing out4 to its table
+requires no new bus data** — the out4 table pulls only its `domainsep` values; the kept table
+pulls the out8 and permute `domainsep` values as before. Injectivity of the `domainsep`
+encoding (spec lines 618–623) carries the soundness argument across the two pull-tables.
 
 The routing decision is made in `PrecompileCompTimeArgs::table()`
 (`crates/lean_vm/src/isa/instruction.rs:83-88`), which currently maps **all** Poseidon16 to a
-single `Table::poseidon16()`; it would branch on `(half_output, permute)` to one of three
-table constructors.
+single `Table::poseidon16()`; it would branch: out4 — `(half_output=true, permute=false)` —
+to the new out4 table constructor, everything else to the existing `Table::poseidon16()`.
 
 ---
 
 ## 4. Files affected (mechanical, multi-site)
 
 `Table` is a fixed enum with a `const`-discriminant index used for logup domain separation.
-Adding two variants touches several wiring sites; none require new cryptographic design.
+Adding **one** variant touches several wiring sites; none require new cryptographic design.
 
 | File | Change |
 |---|---|
-| `crates/lean_vm/src/tables/table_enum.rs` | `N_TABLES 3→5`; add `Poseidon16Out4`, `Poseidon16Out8`, `Poseidon16Permute` to `ALL_TABLES`, the `Table` enum, both `delegate_to_inner!` arms, and constructors (`table_enum.rs:6,7,12-16,19-36,45-47` region). (Replace the single `Poseidon16` variant with the three; or keep one and add two.) |
-| `crates/lean_vm/src/tables/poseidon/mod.rs` | Parameterise the result-lookup width (const generic `RES_WIDTH` ∈ {4,8,16}); `bus_interactions()` (`:175-179`) emits `RES_WIDTH` result cells; `table()` (`:141`) and the `execute` routing `ctx.traces.get_mut(&self.table())` (`:228`) return the right variant. Optionally drop the now-constant flag columns / unused `out_hi` per specialised table. |
-| `crates/lean_vm/src/isa/instruction.rs` | `PrecompileCompTimeArgs::table()` (`:83-88`) currently maps **all** Poseidon16 to one table; branch on `(half_output, permute)` → out4 / out8 / permute constructor. |
-| `crates/lean_prover/src/trace_gen.rs` | Fill all three poseidon traces (currently fills the single `Table::poseidon16()`). |
-| `crates/lean_vm/src/execution/runner.rs` | `tables` map auto-includes the new tables via `ALL_TABLES`/`N_TABLES`; the `n_poseidons` stat may want to sum the three. |
+| `crates/lean_vm/src/tables/table_enum.rs` | `N_TABLES 3→4`; add **one** `Poseidon16Out4` variant to `ALL_TABLES`, the `Table` enum, both `delegate_to_inner!` arms, and a constructor (`table_enum.rs:6,7,12-16,19-36,45-47` region). The existing `Poseidon16` variant stays. |
+| `crates/lean_vm/src/tables/poseidon/mod.rs` | Parameterise the result-lookup width (const generic `RES_WIDTH` ∈ {4,16}, or a bool); `bus_interactions()` (`:175-179`) emits `RES_WIDTH` result cells (4 for the out4 table, 16 otherwise); `table()` (`:141`) and the `execute` routing `ctx.traces.get_mut(&self.table())` (`:228`) return the out4 variant when `(half_output=true, permute=false)`. Optionally drop the now-constant `flag_out4`=1 column / unused `out_hi` and `out_lo[4..8]` in the out4 table. |
+| `crates/lean_vm/src/isa/instruction.rs` | `PrecompileCompTimeArgs::table()` (`:83-88`) currently maps **all** Poseidon16 to one table; branch out4 → new constructor, everything else → existing `Table::poseidon16()`. |
+| `crates/lean_prover/src/trace_gen.rs` | Fill both poseidon traces (currently fills the single `Table::poseidon16()`). |
+| `crates/lean_vm/src/execution/runner.rs` | `tables` map auto-includes the new table via `ALL_TABLES`/`N_TABLES`; the `n_poseidons` stat may want to sum the two. |
 
 The AIR constraint body (`eval` / `eval_poseidon1_16`, `poseidon/mod.rs:312-361, 386`) is
-**shared** — all three tables run the identical permutation. Only the declared result-lookup
-width (and possibly the specialised flag columns) differ.
+**shared** — both tables run the identical permutation. Only the declared result-lookup
+width (and possibly the specialised flag column in the out4 table) differs.
 
 ---
 
@@ -246,26 +261,46 @@ width (and possibly the specialised flag columns) differ.
 > Tables are padded to the next power of two (with a minimum of `2^8` rows).
 
 Each table pays its own padding `H_T` (next power of two, min `2^8`). The split is a net win
-when the result-lookup saving outweighs the extra padding. Per the §1e call-site mix:
+when the result-lookup saving outweighs the extra padding:
 
 | Table | typical population | result width | net effect |
 |---|---|---|---|
-| `Poseidon16Out8` | the bulk (≈42 sites; the hot loops) | 8 (was 16) | **halves** the dominant result-lookup cost — primary win |
-| `Poseidon16Out4` | the `quarter*` family (11 sites) | 4 (was 16) | `12·H_T` saved on a smaller table |
-| `Poseidon16Permute` | genuine 16-cell (8 sites) | 16 (unchanged) | isolates 16-cell calls; may sit near the `2^8` floor |
+| `Poseidon16Out4` (new) | the **dynamic bulk** — one hash per Merkle layer, several per WOTS chain, × all signers | 4 (was 16) | `12·H_T` saved on the **highest-multiplicity** table — primary win |
+| `Poseidon16` (kept) | out8 + permute | 16 (unchanged) | no change this iteration |
 
-The dominant out8 table is well above the floor in any real XMSS run, so its 16→8 halving is
-unambiguous. The out4 and permute tables are smaller; if either is so sparse that its `2^8`
-floor erodes its own saving, it can be merged back (e.g. fold permute’s 8 calls into a 16-cell
-table shared with out8 — but that re-inflates out8 to 16, defeating the point, so prefer
-keeping permute separate only if it clears the floor).
+The out4 table is well above the `2^8` floor in any real XMSS run (Merkle + WOTS hashes scale
+with the workload), so peeling it off — even just the `12·H_T` saving per row — is the largest
+single-table win available. The kept table is unchanged, so there is no risk of a sparse new
+table eroding its own saving via the floor.
 
-**Caveat on the numbers:** §1e counts are *static call sites*, not dynamic row counts. Loops,
-`unroll`, and `dynamic_unroll` will change the real per-mode populations substantially. A
-one-off instrumented XMSS run (count `flag_out4`/`flag_out8`/`flag_permute` rows after
-execution) should confirm the populations — especially that out8 dominates and that permute
-clears `2^8` — before committing to three tables vs. two (out4+out8, folding permute into the
-16-cell table).
+**Confirm dynamic populations before coding.** §1e counts are *static call sites* and
+*understate* out4's true weight — loops, `unroll`, and `dynamic_unroll` blow up the per-layer /
+per-chain 4-cell calls. A one-off instrumented XMSS run (count `flag_out4` /
+`flag_out8`/`flag_permute` rows after execution) should confirm out4 is the dominant executed
+width and that it clears `2^8`. If a later iteration also wants to peel out8 (8-cell) into a
+third table, gate that on its own dynamic count clearing the floor.
+
+---
+
+## 5b. Future work (out of scope for this iteration)
+
+Once the out4 functionality lives in its own table, the **kept** `Poseidon16` table no longer
+emits any out4 rows. Its `flag_out4` column and all related machinery become dead weight and
+can be removed in a **follow-up** (explicitly *not* part of this iteration):
+
+- Drop the `flag_out4` committed column (`POSEIDON_COL_FLAG_OUT4`, `poseidon/mod.rs:101`) and
+  the `flag_out4` field from `Poseidon1Cols16`.
+- Drop the now-vacuous AIR constraints that mention `flag_out4`: `assert_bool(flag_out4)`
+  (`:347`), `flag_permute * flag_out4` (`:351`), `flag_out8 * flag_out4` (`:352`), and the
+  `flag_out4` term in the mode-coverage check (`:353-355`). The output gates simplify:
+  `gate_lo_8 = 1 - flag_out4` → `1` (out_lo[4..8] always constrained), and `gate_hi =
+  1 - flag_out8 - flag_out4` → `1 - flag_out8`.
+- This also drops `degree_air` back below 10 for the kept table (the `(1 - flag_out4)` gating
+  factor disappears) and reduces its `n_constraints`.
+
+Deferred because it touches the *shared* AIR body / `Poseidon1Cols16` layout that the kept
+table still uses during this iteration; doing it now would entangle the two changes. Land the
+out4 split first, confirm it green, then prune `flag_out4` from the base table separately.
 
 ---
 
@@ -278,16 +313,21 @@ clears `2^8` — before committing to three tables vs. two (out4+out8, folding p
   (`poseidon/mod.rs:178`), and it dominates `N` (line 835) even though no call writes more
   than its mode’s width (4 / 8 / 16, `poseidon/mod.rs:251-258`).
 - **DSL names are counterintuitive** (§1e): `compress_half` and `permute_half` write **8**
-  cells; only `quarter*` writes 4; plain `permute` writes 16. Call-site data (XMSS-like
-  zkDSL) shows **8-cell is the dominant width**, not 4 — overturning the earlier premise.
+  cells; only `quarter*` writes 4; plain `permute` writes 16. Static call-site data shows
+  8-cell is the most common width, but **dynamic execution is dominated by the 4-cell
+  (`quarter*`) case** — one hash per Merkle layer plus several per WOTS chain, multiplied
+  across all signers/layers/chains.
 - "Compress" already contains a full permutation (line 571); out4 is compression-only and a
   4-cell permute is forbidden by the AIR (`poseidon/mod.rs:346-355`, spec line 592).
-- The spec-clean fix is **three tables keyed on output width** (out4 / out8 / permute): `𝒯`
-  and `N` (lines 818, 835) sum cleanly over tables. Routing needs **no new bus data** — each
-  mode already carries a distinct `domainsep` (`poseidon/mod.rs:322-326`).
-- The **out8 table is the high-value target** (≈80% of static call sites; 16→8 halves its
-  result lookup). out4 captures the `quarter*` family; permute isolates the rare 16-cell case.
-- Implementation is mechanical wiring across ~5 files; the AIR body is shared.
-- **Verify dynamic per-mode row counts** (not just static sites) and **reconcile with
-  upstream** (`feature/poseidon-compress-only-table`, whose `out4`/`out8`/`domainsep` design
-  looks like scaffolding for exactly this split) before coding.
+- The chosen fix is **peel out4 into its own table** (4-cell result lookup); keep out8 +
+  permute in the existing 16-cell table. `𝒯` and `N` (lines 818, 835) sum cleanly over tables.
+  Routing needs **no new bus data** — out4 already carries a distinct `domainsep`
+  (`poseidon/mod.rs:322-326`).
+- The **out4 table is the high-value target by dynamic row count** (16→4 saves `12·H_T` per row
+  on the highest-multiplicity table). A later out8 split (8-cell) is deferred — gate it on its
+  own dynamic count.
+- Implementation is mechanical wiring across ~5 files for **one** new table variant; the AIR
+  body is shared.
+- **Verify dynamic per-mode row counts** (not just static sites — they understate out4) and
+  **reconcile with upstream** (`feature/poseidon-compress-only-table`, whose
+  `out4`/`out8`/`domainsep` design looks like scaffolding for exactly this split) before coding.

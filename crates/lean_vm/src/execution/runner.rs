@@ -341,7 +341,8 @@ fn execute_bytecode_helper(
     let metadata = ExecutionMetadata {
         cycles: trace.pcs.len(),
         memory: memory.0.len(),
-        n_poseidons: trace.tables[&Table::poseidon16()].columns[0].len(),
+        n_poseidons: trace.tables[&Table::poseidon16()].columns[0].len()
+            + trace.tables[&Table::poseidon16_out4()].columns[0].len(),
         n_extension_ops: trace.tables[&Table::extension_op()].columns[0].len(),
         bytecode_size: bytecode.code.len(),
         public_input_size: PUBLIC_INPUT_LEN,

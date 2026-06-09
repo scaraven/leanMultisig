@@ -82,6 +82,11 @@ pub enum PrecompileCompTimeArgs<S> {
 impl<S> PrecompileCompTimeArgs<S> {
     pub fn table(&self) -> Table {
         match self {
+            Self::Poseidon16 {
+                half_output: true,
+                permute: false,
+                ..
+            } => Table::poseidon16_out4(),
             Self::Poseidon16 { .. } => Table::poseidon16(),
             Self::ExtensionOp { .. } => Table::extension_op(),
         }
