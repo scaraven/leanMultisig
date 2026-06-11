@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use backend::*;
 use lean_vm::{
-    EF, ExtraDataForBuses, F, POSEIDON_COL_ADDR_LEFT_HI, POSEIDON_COL_ADDR_LEFT_LO,
+    EF, ExtraDataForBuses, F, FF_OFF, POSEIDON_COL_ADDR_LEFT_HI, POSEIDON_COL_ADDR_LEFT_LO,
     POSEIDON_COL_INPUT_START, POSEIDON_COL_MULTIPLICITY, Poseidon16Precompile, fill_trace_poseidon_16,
     num_cols_poseidon_16,
 };
@@ -28,9 +28,9 @@ fn test_prove_poseidon() {
     trace[POSEIDON_COL_MULTIPLICITY] = vec![F::ONE; n_rows];
     trace[POSEIDON_COL_ADDR_LEFT_LO] = vec![F::ZERO; n_rows];
     trace[POSEIDON_COL_ADDR_LEFT_HI] = vec![F::from_usize(HALF_DIGEST_LEN); n_rows];
-    fill_trace_poseidon_16(&mut trace);
+    fill_trace_poseidon_16::<16, 0>(&mut trace);
 
-    let air = Poseidon16Precompile::<false>;
+    let air = Poseidon16Precompile::<16, 0, FF_OFF, false>;
     let n_constraints = air.n_constraints();
     let air_degree = air.degree_air();
 
@@ -116,7 +116,7 @@ fn test_prove_poseidon() {
 
     let col_evals_v: Vec<EF> = verifier_state.next_extension_scalars_vec(n_cols).unwrap();
     let constraint_eval =
-        <Poseidon16Precompile<false> as SumcheckComputation<EF>>::eval_extension(&air, &col_evals_v, &extra_data);
+        <Poseidon16Precompile<16, 0, FF_OFF, false> as SumcheckComputation<EF>>::eval_extension(&air, &col_evals_v, &extra_data);
 
     let natural_ordering_point_v = natural_ordering_point_for_session(&sumcheck_air_point_v.0, log_n_rows);
     let eq_val = MultilinearPoint(eq_factor_v).eq_poly_outside(&MultilinearPoint(natural_ordering_point_v.clone()));

@@ -112,16 +112,16 @@ pub fn get_execution_trace(
 
     {
         let poseidon_out4_trace = traces.get_mut(&Table::poseidon16_out4()).unwrap();
-        fill_trace_poseidon_16_out4(&mut poseidon_out4_trace.columns);
+        fill_trace_poseidon_16::<4, 0>(&mut poseidon_out4_trace.columns);
     }
 
     {
         let poseidon_out8_trace = traces.get_mut(&Table::poseidon16_out8()).unwrap();
-        fill_trace_poseidon_16_out8(&mut poseidon_out8_trace.columns);
+        fill_trace_poseidon_16::<8, 1>(&mut poseidon_out8_trace.columns);
     }
 
     let poseidon_trace = traces.get_mut(&Table::poseidon16()).unwrap();
-    fill_trace_poseidon_16(&mut poseidon_trace.columns);
+    fill_trace_poseidon_16::<16, 0>(&mut poseidon_trace.columns);
     // No backfill needed: permute16 constrains all 16 outputs, out8 constrains out_lo[0..8].
 
     let extension_op_trace = traces.get_mut(&Table::extension_op()).unwrap();

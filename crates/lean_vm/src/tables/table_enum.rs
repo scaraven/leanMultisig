@@ -19,9 +19,9 @@ pub const LOG_MAX_BUS_WIDTH: usize = log2_ceil_usize(MAX_BUS_WIDTH);
 pub enum Table {
     Execution(ExecutionTable<true>),
     ExtensionOp(ExtensionOpPrecompile<true>),
-    Poseidon16(Poseidon16Precompile<true>),
-    Poseidon16Out4(Poseidon16Out4Precompile<true>),
-    Poseidon16Out8(Poseidon16Out8Precompile<true>),
+    Poseidon16(Poseidon16Precompile<16, 0, {crate::tables::poseidon::FF_OFF}, true>),
+    Poseidon16Out4(Poseidon16Precompile<4, 0, {crate::tables::poseidon::FF_ON}, true>),
+    Poseidon16Out8(Poseidon16Precompile<8, 1, {crate::tables::poseidon::FF_GATED}, true>),
 }
 
 #[macro_export]
@@ -59,10 +59,10 @@ impl Table {
         Self::Poseidon16(Poseidon16Precompile)
     }
     pub const fn poseidon16_out4() -> Self {
-        Self::Poseidon16Out4(Poseidon16Out4Precompile)
+        Self::Poseidon16Out4(Poseidon16Precompile)
     }
     pub const fn poseidon16_out8() -> Self {
-        Self::Poseidon16Out8(Poseidon16Out8Precompile)
+        Self::Poseidon16Out8(Poseidon16Precompile)
     }
     pub fn embed<PF: PrimeCharacteristicRing>(&self) -> PF {
         PF::from_usize(self.index())

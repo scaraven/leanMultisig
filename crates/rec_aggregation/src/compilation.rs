@@ -475,9 +475,9 @@ fn all_air_evals_in_zk_dsl() -> String {
     let mut res = String::new();
     res += &air_eval_in_zk_dsl(ExecutionTable::<false> {});
     res += &air_eval_in_zk_dsl(ExtensionOpPrecompile::<false> {});
-    res += &air_eval_in_zk_dsl(Poseidon16Precompile::<false> {});
-    res += &air_eval_in_zk_dsl(Poseidon16Out4Precompile::<false> {});
-    res += &air_eval_in_zk_dsl(Poseidon16Out8Precompile::<false> {});
+    res += &air_eval_in_zk_dsl(Poseidon16Precompile::<16, 0, {FF_OFF},   false>);
+    res += &air_eval_in_zk_dsl(Poseidon16Precompile::<4,  0, {FF_ON},    false>);
+    res += &air_eval_in_zk_dsl(Poseidon16Precompile::<8,  1, {FF_GATED}, false>);
     res
 }
 
@@ -816,5 +816,5 @@ fn display_all_air_evals_in_zk_dsl() {
 
 #[test]
 fn display_poseidon_air_in_zk_dsl() {
-    println!("{}", air_eval_in_zk_dsl(Poseidon16Precompile::<false> {}));
+    println!("{}", air_eval_in_zk_dsl(Poseidon16Precompile::<16, 0, {FF_OFF}, false>));
 }
