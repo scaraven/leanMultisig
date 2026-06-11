@@ -53,12 +53,18 @@ pub fn field_representation(instr: &Instruction) -> [F; N_INSTRUCTION_COLUMNS] {
                     hardcoded_offset_left,
                     permute,
                 } => {
+                    let _ = half_output;
                     let flag_left = hardcoded_offset_left.is_some() as usize;
                     let offset_left_val = hardcoded_offset_left.unwrap_or(0);
-                    let out8 = (!*half_output && !*permute) || (*half_output && *permute);
+                    // Each poseidon call routes to a dedicated table (out4 / out8 / permute16),
+                    // and every table's AIR reconstructs domainsep WITHOUT a FLAG_OUT8 term
+                    // (the output width is implied by which table/bus slot the row lives in).
+                    // This unified formula matches all three tables' `eval()`:
+                    //   out4 (permute=false): BASE + flag_left terms
+                    //   out8 (permute=false|true): BASE + permute*PERMUTE + flag_left terms
+                    //   permute16 (permute=true):  BASE + PERMUTE + flag_left terms
                     POSEIDON_DOMAINSEP_BASE
                         + POSEIDON_FLAG_PERMUTE_SHIFT * (*permute as usize)
-                        + POSEIDON_FLAG_OUT8_SHIFT * (out8 as usize)
                         + POSEIDON_FLAG_LEFT_SHIFT * flag_left
                         + POSEIDON_OFFSET_LEFT_SHIFT * offset_left_val
                 }

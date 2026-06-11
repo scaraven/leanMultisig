@@ -99,6 +99,10 @@ pub fn get_execution_trace(
     memory_padded.extend(std::iter::repeat_n(F::ZERO, 16));
     let null_poseidon_16_hash_ptr = memory_padded.len();
     memory_padded.extend_from_slice(get_poseidon_16_of_zero());
+    // 16-cell permute([0;16]) for the pure-permute16 table's padding-row result lookup
+    // (its result group reads all 16 output cells, unlike the 8-cell compress-of-zero above).
+    let null_poseidon_16_permute_ptr = memory_padded.len();
+    memory_padded.extend_from_slice(get_poseidon_16_permute_of_zero());
 
     // IMPORTANT: memory size should always be >= number of VM cycles
     let padded_memory_len = (memory_padded.len().max(n_cycles).max(1 << MIN_LOG_N_ROWS_PER_TABLE)).next_power_of_two();
@@ -111,39 +115,14 @@ pub fn get_execution_trace(
         fill_trace_poseidon_16_out4(&mut poseidon_out4_trace.columns);
     }
 
+    {
+        let poseidon_out8_trace = traces.get_mut(&Table::poseidon16_out8()).unwrap();
+        fill_trace_poseidon_16_out8(&mut poseidon_out8_trace.columns);
+    }
+
     let poseidon_trace = traces.get_mut(&Table::poseidon16()).unwrap();
     fill_trace_poseidon_16(&mut poseidon_trace.columns);
-
-    // Override the output columns the AIR leaves unconstrained with the actual memory values,
-    // so the 16-cell output lookup matches. out_lo[4..8] is free when the output is only 4
-    // elements (out4); out_hi is free for everything except the full 16-element
-    // permutation
-    {
-        let split = POSEIDON_COL_OUT_LO + HALF_DIGEST_LEN;
-        let (left, right) = poseidon_trace.columns.split_at_mut(split);
-        let flag_out4_col = &left[POSEIDON_COL_FLAG_OUT4];
-        let flag_out8_col = &left[POSEIDON_COL_FLAG_OUT8];
-        let nu_c_col = &left[POSEIDON_COL_NU_C];
-        const N: usize = HALF_DIGEST_LEN + DIGEST_LEN;
-        let cols: &mut [Vec<F>; N] = (&mut right[..N]).try_into().unwrap();
-
-        transposed_par_for_each_mut(cols, |i, row| {
-            let flag_out4 = flag_out4_col[i];
-            let flag_out8 = flag_out8_col[i];
-            let nu_c = nu_c_col[i];
-            let base = nu_c.to_usize();
-            if flag_out4 == F::ONE {
-                for j in 0..HALF_DIGEST_LEN {
-                    *row[j] = memory_padded[base + HALF_DIGEST_LEN + j];
-                }
-            }
-            if flag_out8 == F::ONE || flag_out4 == F::ONE {
-                for j in 0..DIGEST_LEN {
-                    *row[HALF_DIGEST_LEN + j] = memory_padded[base + DIGEST_LEN + j];
-                }
-            }
-        });
-    }
+    // No backfill needed: permute16 constrains all 16 outputs, out8 constrains out_lo[0..8].
 
     let extension_op_trace = traces.get_mut(&Table::extension_op()).unwrap();
     fill_trace_extension_op(extension_op_trace, &memory_padded);
@@ -167,6 +146,7 @@ pub fn get_execution_trace(
             &mut traces,
             padding_zero_vec_ptr,
             null_poseidon_16_hash_ptr,
+            null_poseidon_16_permute_ptr,
             bytecode.ending_pc,
             floor,
         );
@@ -184,6 +164,7 @@ fn pad_table(
     traces: &mut BTreeMap<Table, TableTrace>,
     zero_vec_ptr: usize,
     null_poseidon_16_hash_ptr: usize,
+    null_poseidon_16_permute_ptr: usize,
     ending_pc: usize,
     min_log_n_rows: usize,
 ) {
@@ -198,7 +179,7 @@ fn pad_table(
     trace.non_padded_n_rows = h;
     trace.log_n_rows = log2_ceil_usize(h + 1).max(min_log_n_rows);
     let n_rows = 1 << trace.log_n_rows;
-    let padding_row = table.padding_row(zero_vec_ptr, null_poseidon_16_hash_ptr, ending_pc);
+    let padding_row = table.padding_row(zero_vec_ptr, null_poseidon_16_hash_ptr, null_poseidon_16_permute_ptr, ending_pc);
     parallel::par_for_each_mut(&mut trace.columns, |i, col| {
         assert!(col.len() <= h); // potentially some columns have not been filled (in Poseidon -> we fill it later with SIMD + parallelism), but the first one should always be representative
         col.resize(n_rows, padding_row[i]);

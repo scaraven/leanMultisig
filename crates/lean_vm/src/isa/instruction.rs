@@ -82,12 +82,30 @@ pub enum PrecompileCompTimeArgs<S> {
 impl<S> PrecompileCompTimeArgs<S> {
     pub fn table(&self) -> Table {
         match self {
+            // out4: half=true, permute=false (quarter / quarter_hardcoded_left)
             Self::Poseidon16 {
                 half_output: true,
                 permute: false,
                 ..
             } => Table::poseidon16_out4(),
-            Self::Poseidon16 { .. } => Table::poseidon16(),
+            // out8: half=false, permute=false (compress_half / compress_half_hardcoded_left)
+            Self::Poseidon16 {
+                half_output: false,
+                permute: false,
+                ..
+            } => Table::poseidon16_out8(),
+            // out8: half=true, permute=true (permute_half / permute_half_hardcoded_left)
+            Self::Poseidon16 {
+                half_output: true,
+                permute: true,
+                ..
+            } => Table::poseidon16_out8(),
+            // permute16: half=false, permute=true (permute only)
+            Self::Poseidon16 {
+                half_output: false,
+                permute: true,
+                ..
+            } => Table::poseidon16(),
             Self::ExtensionOp { .. } => Table::extension_op(),
         }
     }
@@ -298,6 +316,91 @@ impl<V: Display, S: Display> Display for PrecompileArgs<V, S> {
             }
             PrecompileCompTimeArgs::ExtensionOp { size, mode } => {
                 write!(f, "{}({arg_0}, {arg_1}, {res}, {size})", mode.name())
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    // Name constants are re-exported to crate root via tables/mod.rs `pub use poseidon::*`.
+    use crate::{
+        ALL_POSEIDON16_NAMES, POSEIDON16_HARDCODED_LEFT_NAME, POSEIDON16_PERMUTE_HALF_HARDCODED_LEFT_NAME,
+        POSEIDON16_PERMUTE_HALF_NAME, POSEIDON16_PERMUTE_NAME, POSEIDON16_QUARTER_HARDCODED_LEFT_NAME,
+        POSEIDON16_QUARTER_NAME,
+    };
+
+    /// Replicates the compiler's (half_output, permute) predicate logic
+    /// (lean_compiler::a_simplify_lang lines ~1701-1713) using only public name constants,
+    /// then asserts that PrecompileCompTimeArgs::table() routes to the expected Table variant.
+    ///
+    /// Routing map:
+    ///   (half=true,  permute=false) → poseidon16_out4()   [quarter / quarter_hardcoded_left]
+    ///   (half=false, permute=false) → poseidon16_out8()   [compress_half / compress_half_hardcoded_left]
+    ///   (half=true,  permute=true)  → poseidon16_out8()   [permute_half / permute_half_hardcoded_left]
+    ///   (half=false, permute=true)  → poseidon16()        [permute]
+    #[test]
+    fn precompile_routing_matches_compiler_predicate() {
+        // Mirrors compiler membership sets exactly (lines 1701-1713 of a_simplify_lang/mod.rs).
+        let permute_names = [
+            POSEIDON16_PERMUTE_NAME,
+            POSEIDON16_PERMUTE_HALF_NAME,
+            POSEIDON16_PERMUTE_HALF_HARDCODED_LEFT_NAME,
+        ];
+        let half_output_names = [
+            POSEIDON16_QUARTER_NAME,
+            POSEIDON16_QUARTER_HARDCODED_LEFT_NAME,
+            POSEIDON16_PERMUTE_HALF_NAME,
+            POSEIDON16_PERMUTE_HALF_HARDCODED_LEFT_NAME,
+        ];
+        let hardcoded_left_names = [
+            POSEIDON16_HARDCODED_LEFT_NAME,
+            POSEIDON16_QUARTER_HARDCODED_LEFT_NAME,
+            POSEIDON16_PERMUTE_HALF_HARDCODED_LEFT_NAME,
+        ];
+
+        for name in ALL_POSEIDON16_NAMES {
+            let permute = permute_names.contains(&name);
+            let half_output = half_output_names.contains(&name);
+            let is_hardcoded_left = hardcoded_left_names.contains(&name);
+
+            let expected_table = match (half_output, permute) {
+                (true, false) => Table::poseidon16_out4(),
+                (false, false) | (true, true) => Table::poseidon16_out8(),
+                (false, true) => Table::poseidon16(),
+            };
+
+            // Test with hardcoded_offset_left = None (the common case).
+            let args_none = PrecompileCompTimeArgs::<usize>::Poseidon16 {
+                half_output,
+                permute,
+                hardcoded_offset_left: None,
+            };
+            assert_eq!(
+                args_none.table(),
+                expected_table,
+                "routing mismatch for name={name:?} (half_output={half_output}, permute={permute}, \
+                 hardcoded_offset_left=None): expected {:?}, got {:?}",
+                expected_table,
+                args_none.table()
+            );
+
+            // For hardcoded-left names, routing must be independent of the offset value.
+            if is_hardcoded_left {
+                let args_some = PrecompileCompTimeArgs::<usize>::Poseidon16 {
+                    half_output,
+                    permute,
+                    hardcoded_offset_left: Some(0usize),
+                };
+                assert_eq!(
+                    args_some.table(),
+                    expected_table,
+                    "routing mismatch for name={name:?} (half_output={half_output}, permute={permute}, \
+                     hardcoded_offset_left=Some(0)): expected {:?}, got {:?}",
+                    expected_table,
+                    args_some.table()
+                );
             }
         }
     }

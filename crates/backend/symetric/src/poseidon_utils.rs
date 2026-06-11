@@ -9,6 +9,7 @@ pub type Poseidon16 = Poseidon1KoalaBear16;
 
 static POSEIDON_16_INSTANCE: OnceLock<Poseidon16> = OnceLock::new();
 static POSEIDON_16_OF_ZERO: OnceLock<[KoalaBear; 8]> = OnceLock::new();
+static POSEIDON_16_PERMUTE_OF_ZERO: OnceLock<[KoalaBear; 16]> = OnceLock::new();
 
 #[inline(always)]
 pub fn get_poseidon16() -> &'static Poseidon16 {
@@ -18,6 +19,15 @@ pub fn get_poseidon16() -> &'static Poseidon16 {
 #[inline(always)]
 pub fn get_poseidon_16_of_zero() -> &'static [KoalaBear; 8] {
     POSEIDON_16_OF_ZERO.get_or_init(|| poseidon16_compress([KoalaBear::default(); 16]))
+}
+
+/// Full 16-cell permutation of the all-zero input.
+/// Used as the padding-row result for the pure-permute16 Poseidon table, whose result
+/// memory lookup reads all 16 output cells (unlike the compress-based tables which read
+/// `get_poseidon_16_of_zero`).
+#[inline(always)]
+pub fn get_poseidon_16_permute_of_zero() -> &'static [KoalaBear; 16] {
+    POSEIDON_16_PERMUTE_OF_ZERO.get_or_init(|| poseidon16_permute([KoalaBear::default(); 16]))
 }
 
 #[inline(always)]

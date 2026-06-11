@@ -205,7 +205,8 @@ pub trait TableT: Air {
     fn name(&self) -> &'static str;
     fn table(&self) -> Table;
     fn bus_interactions(&self) -> Vec<BusInteraction>;
-    fn padding_row(&self, zero_vec_ptr: usize, null_hash_ptr: usize, ending_pc: usize) -> Vec<F>;
+    fn padding_row(&self, zero_vec_ptr: usize, null_hash_ptr: usize, null_permute_ptr: usize, ending_pc: usize)
+    -> Vec<F>;
     fn execute<M: MemoryAccess>(
         &self,
         arg_a: F,
