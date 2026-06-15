@@ -128,6 +128,10 @@ pub fn compile_to_low_level_bytecode(
 
     debug_assert_eq!(instructions.len(), bytecode_size);
 
+    for instruction in &instructions {
+        validate_instruction(instruction)?;
+    }
+
     let instructions_encoded = instructions.par_iter().map(field_representation).collect::<Vec<_>>();
 
     let mut instructions_multilinear = vec![];
@@ -155,7 +159,7 @@ pub fn compile_to_low_level_bytecode(
         pc_to_location.push(current_location);
     }
 
-    let hash = poseidon_compress_slice(&instructions_multilinear, true);
+    let hash = poseidon_compress_slice(&instructions_multilinear);
 
     let code: Vec<_> = instructions
         .into_iter()
@@ -167,7 +171,12 @@ pub fn compile_to_low_level_bytecode(
         .collect();
     assert!(hints.is_empty());
 
+    if log2_ceil_usize(code.len()) > MAX_BYTECODE_LOG_SIZE {
+        return Err("Bytecode too large".to_string());
+    }
+
     Ok(Bytecode {
+        unpadded_size: n_real_instructions,
         code,
         instructions_multilinear,
         hash,
@@ -414,6 +423,16 @@ fn eval_constant_value(constant: &ConstantValue, compiler: &Compiler) -> usize {
         ConstantValue::MatchBlockSize { match_index } => compiler.match_block_sizes[*match_index],
         ConstantValue::MatchFirstBlockStart { match_index } => compiler.match_first_block_starts[*match_index],
     }
+}
+
+fn validate_instruction(instruction: &Instruction) -> Result<(), String> {
+    if let Instruction::Precompile(p) = instruction
+        && let PrecompileCompTimeArgs::ExtensionOp { size, .. } = &p.data
+        && *size == 0
+    {
+        return Err("extension_op precompile size must be >= 1, got 0".to_string());
+    }
+    Ok(())
 }
 
 fn eval_const_expression(constant: &ConstExpression, compiler: &Compiler) -> F {

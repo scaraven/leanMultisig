@@ -19,7 +19,11 @@ pub struct XmssSecretKey {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct XmssSignature {
     pub wots_signature: WotsSignature,
-    pub merkle_proof: Vec<Digest>,
+    #[serde(
+        with = "backend::array_serialization",
+        bound(serialize = "F: Serialize", deserialize = "F: Deserialize<'de>")
+    )]
+    pub merkle_proof: [Digest; LOG_LIFETIME],
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -142,6 +146,7 @@ pub fn xmss_key_gen(
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
 pub enum XmssSignatureError {
     SlotOutOfRange,
+    InvalidRandomness,
 }
 
 pub fn xmss_sign<R: CryptoRng>(
@@ -164,19 +169,19 @@ pub fn xmss_sign_with_randomness(
         return Err(XmssSignatureError::SlotOutOfRange);
     }
     let wots_secret_key = gen_wots_secret_key(&secret_key.seed, slot, secret_key.public_param);
-    let wots_signature = wots_secret_key.sign_with_randomness(message, slot, &secret_key.public_key(), randomness);
-    let merkle_proof = (0..LOG_LIFETIME)
-        .map(|level| {
-            let neighbour_index = ((slot as u64) >> level) ^ 1;
-            let base = (secret_key.slot_start as u64) >> level;
-            let top = (secret_key.slot_end as u64) >> level;
-            if neighbour_index >= base && neighbour_index <= top {
-                secret_key.merkle_tree[level][(neighbour_index - base) as usize]
-            } else {
-                gen_random_node(&secret_key.seed, level, neighbour_index)
-            }
-        })
-        .collect();
+    let wots_signature = wots_secret_key
+        .sign_with_randomness(message, slot, &secret_key.public_key(), randomness)
+        .ok_or(XmssSignatureError::InvalidRandomness)?;
+    let merkle_proof = std::array::from_fn(|level| {
+        let neighbour_index = ((slot as u64) >> level) ^ 1;
+        let base = (secret_key.slot_start as u64) >> level;
+        let top = (secret_key.slot_end as u64) >> level;
+        if neighbour_index >= base && neighbour_index <= top {
+            secret_key.merkle_tree[level][(neighbour_index - base) as usize]
+        } else {
+            gen_random_node(&secret_key.seed, level, neighbour_index)
+        }
+    });
     Ok(XmssSignature {
         wots_signature,
         merkle_proof,
@@ -206,12 +211,9 @@ pub fn xmss_verify(
 ) -> Result<(), XmssVerifyError> {
     let wots_public_key = signature
         .wots_signature
-        .recover_public_key(message, slot, pub_key, &signature.wots_signature)
+        .recover_public_key(message, slot, pub_key)
         .ok_or(XmssVerifyError::InvalidWots)?;
     let mut current_hash = wots_public_key.hash(pub_key.public_param, slot);
-    if signature.merkle_proof.len() != LOG_LIFETIME {
-        return Err(XmssVerifyError::InvalidMerklePath);
-    }
     for (level, neighbour) in signature.merkle_proof.iter().enumerate() {
         let is_left = (((slot as u64) >> level) & 1) == 0;
         let parent_index = ((slot as u64) >> (level + 1)) as u32;

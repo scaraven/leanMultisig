@@ -4,12 +4,12 @@ use lean_prover::prove_execution::prove_execution;
 use lean_prover::verify_execution::{ProofVerificationDetails, verify_execution};
 use lean_vm::{DIGEST_LEN, ExecutionMetadata, ExecutionWitness, F};
 use serde::{Deserialize, Serialize};
-use sphincs::{SPX_D, SPX_TREE_HEIGHT};
 use sphincs::{
     HALF_DIGEST_SIZE, MESSAGE_LEN_FE,
     core::{SphincsPublicKey, SphincsSig, extract_digest_parts, hmsg},
     fors_sig_to_flat,
 };
+use sphincs::{SPX_D, SPX_TREE_HEIGHT};
 use std::collections::HashMap;
 use utils::{poseidon_compress_slice, poseidon16_compress_pair};
 
@@ -64,10 +64,10 @@ pub fn sphincs_public_input(pubkeys: &[[F; DIGEST_LEN]], messages: &[[F; MESSAGE
     let seg_nsigs = poseidon16_compress_pair(&[F::ZERO; DIGEST_LEN], &nsigs_chunk);
 
     let pubkeys_flat: Vec<F> = pubkeys.iter().flatten().copied().collect();
-    let seg_pubkeys = poseidon_compress_slice(&pubkeys_flat, true);
+    let seg_pubkeys = poseidon_compress_slice(&pubkeys_flat);
 
     let messages_flat: Vec<F> = messages.iter().flatten().copied().collect();
-    let seg_messages = poseidon_compress_slice(&messages_flat, true);
+    let seg_messages = poseidon_compress_slice(&messages_flat);
 
     let h01 = poseidon16_compress_pair(&seg_nsigs, &seg_pubkeys);
     poseidon16_compress_pair(&h01, &seg_messages)
@@ -147,7 +147,7 @@ pub fn sphincs_aggregate(signers: &[SphincsSignerInput], log_inv_rate: usize) ->
     let pubkeys: Vec<[F; DIGEST_LEN]> = signers.iter().map(|s| sphincs_full_pubkey(&s.pubkey)).collect();
     let messages: Vec<[F; MESSAGE_LEN_FE]> = signers.iter().map(|s| s.message).collect();
 
-    let public_input = sphincs_public_input(&pubkeys, &messages).to_vec();
+    let public_input = sphincs_public_input(&pubkeys, &messages);
     let witness = build_sphincs_witness(signers);
     let whir_config = default_whir_config(log_inv_rate);
 
@@ -172,7 +172,7 @@ pub fn sphincs_verify_aggregation(
     messages: &[[F; MESSAGE_LEN_FE]],
     agg: &AggregatedSPHINCS,
 ) -> Result<ProofVerificationDetails, ProofError> {
-    let public_input = sphincs_public_input(pubkeys, messages).to_vec();
+    let public_input = sphincs_public_input(pubkeys, messages);
     verify_execution(
         crate::compilation::get_sphincs_bytecode(),
         &public_input,
@@ -200,5 +200,6 @@ pub fn build_sphincs_witness(signers: &[SphincsSignerInput]) -> ExecutionWitness
     ExecutionWitness {
         preamble_memory_len: PREAMBLE_MEMORY_LEN,
         hints,
+        min_table_log_n_rows: Default::default(),
     }
 }

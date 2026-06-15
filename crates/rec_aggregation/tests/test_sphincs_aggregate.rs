@@ -155,6 +155,17 @@ fn make_bytecode(test_file: &str) -> lean_vm::Bytecode {
 }
 
 #[test]
+fn test_main_sphincs_compiles() {
+    // Compile-only check for the batch entrypoint. main_sphincs.py is otherwise
+    // only exercised through the (expensive) sphincs_aggregate proving path, so this
+    // guards against DSL interface drift in the entrypoint itself.
+    run_on_large_stack(|| {
+        rec_aggregation::compilation::init_sphincs_bytecode();
+        let _ = rec_aggregation::compilation::get_sphincs_bytecode();
+    });
+}
+
+#[test]
 fn profile_sphincs_verify() {
     run_on_large_stack(|| {
         let bytecode = make_bytecode("test_sphincs_aggregate.py");
@@ -165,9 +176,10 @@ fn profile_sphincs_verify() {
         let witness = ExecutionWitness {
             preamble_memory_len: PREAMBLE_MEMORY_LEN,
             hints,
+            ..Default::default()
         };
 
-        let result = execute_bytecode(&bytecode, &vec![F::from_usize(0); DIGEST_LEN], &witness, true);
+        let result = execute_bytecode(&bytecode, &[F::from_usize(0); DIGEST_LEN], &witness, true);
         println!("{}", result.metadata.display());
     });
 }
@@ -184,9 +196,10 @@ fn test_sphincs_aggregate_verify() {
         let witness = ExecutionWitness {
             preamble_memory_len: PREAMBLE_MEMORY_LEN,
             hints,
+            ..Default::default()
         };
 
-        execute_bytecode(&bytecode, &vec![F::from_usize(0); DIGEST_LEN], &witness, false);
+        execute_bytecode(&bytecode, &[F::from_usize(0); DIGEST_LEN], &witness, false);
     });
 }
 
@@ -224,7 +237,10 @@ fn test_hypertree_merkle_verify() {
 
         let hints = HashMap::from([
             ("pk_seed".to_string(), vec![pk_seed.to_vec()]),
-            ("tree_adrs0".to_string(), vec![vec![Adrs::tree(0, layer_tree_address as u32, 0, 0).adrs0]]),
+            (
+                "tree_adrs0".to_string(),
+                vec![vec![Adrs::tree(0, layer_tree_address as u32, 0, 0).adrs0]],
+            ),
             ("layer_leaf_index".to_string(), vec![vec![F::from_usize(leaf_idx)]]),
             ("leaf_node".to_string(), vec![leaf_node.to_vec()]),
             (
@@ -237,9 +253,10 @@ fn test_hypertree_merkle_verify() {
         let witness = ExecutionWitness {
             preamble_memory_len: PREAMBLE_MEMORY_LEN,
             hints,
+            ..Default::default()
         };
 
-        execute_bytecode(&bytecode, &vec![F::from_usize(0); DIGEST_LEN], &witness, false);
+        execute_bytecode(&bytecode, &[F::from_usize(0); DIGEST_LEN], &witness, false);
     });
 }
 
@@ -284,8 +301,9 @@ fn test_hypertree_verify() {
         let witness = ExecutionWitness {
             preamble_memory_len: PREAMBLE_MEMORY_LEN,
             hints: hints.clone(),
+            ..Default::default()
         };
-        execute_bytecode(&bytecode, &vec![F::from_usize(0); DIGEST_LEN], &witness, false);
+        execute_bytecode(&bytecode, &[F::from_usize(0); DIGEST_LEN], &witness, false);
 
         let mut wrong_pk = pk;
         wrong_pk[0] += F::ONE;
@@ -293,9 +311,10 @@ fn test_hypertree_verify() {
         let wrong_witness = ExecutionWitness {
             preamble_memory_len: PREAMBLE_MEMORY_LEN,
             hints: wrong_hints,
+            ..Default::default()
         };
         assert!(
-            try_execute_bytecode(&bytecode, &vec![F::from_usize(0); DIGEST_LEN], &wrong_witness, false).is_err(),
+            try_execute_bytecode(&bytecode, &[F::from_usize(0); DIGEST_LEN], &wrong_witness, false).is_err(),
             "should fail: wrong expected hypertree root"
         );
     });

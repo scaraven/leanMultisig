@@ -5,12 +5,12 @@ use lean_prover::{
     WHIR_SUBSEQUENT_FOLDING_FACTOR, default_whir_config,
 };
 use lean_vm::*;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::OnceLock;
 use sub_protocols::{N_VARS_TO_SEND_GKR_COEFFS, min_stacked_n_vars, total_whir_statements};
 use tracing::instrument;
 use utils::Counter;
-use xmss::{LOG_LIFETIME, MESSAGE_LEN_FE};
+use xmss::{LOG_LIFETIME, MESSAGE_LEN_FE, V, XMSS_DIGEST_LEN, W, TARGET_SUM, RANDOMNESS_LEN_FE, PUBLIC_PARAM_LEN_FE};
 
 use crate::type_1_aggregation::TWEAK_TABLE_SIZE_FE_PADDED;
 
@@ -30,6 +30,10 @@ pub fn get_aggregation_bytecode() -> &'static Bytecode {
     BYTECODE
         .get()
         .unwrap_or_else(|| panic!("call init_aggregation_bytecode() first"))
+}
+
+pub fn try_get_aggregation_bytecode() -> Option<&'static Bytecode> {
+    BYTECODE.get()
 }
 
 pub fn init_aggregation_bytecode() {
@@ -54,12 +58,12 @@ pub(crate) fn bytecode_claim_size_padded(program_log_size: usize) -> usize {
     ((bytecode_point_n_vars + 1) * DIMENSION).next_multiple_of(DIGEST_LEN)
 }
 
-pub(crate) fn bytecode_hash_domsep_offset(program_log_size: usize) -> usize {
+pub(crate) fn initial_fiat_shamir_cap_offset(program_log_size: usize) -> usize {
     BYTECODE_CLAIM_OFFSET + bytecode_claim_size_padded(program_log_size)
 }
 
 pub(crate) fn component_data_offset(program_log_size: usize) -> usize {
-    bytecode_hash_domsep_offset(program_log_size) + DIGEST_LEN
+    initial_fiat_shamir_cap_offset(program_log_size) + DIGEST_LEN
 }
 
 pub(crate) fn type1_input_data_size_padded(program_log_size: usize) -> usize {
@@ -88,7 +92,7 @@ fn compile_main_program_self_referential() -> Bytecode {
         if actual_log_size == log_size_guess {
             return bytecode;
         }
-        println!(
+        eprintln!(
             "Wrong guess at `compile_main_program_self_referential` (log_size {log_size_guess}->{actual_log_size})"
         );
         log_size_guess = actual_log_size;
@@ -244,15 +248,11 @@ pub fn build_replacements(log_inner_bytecode: usize, bytecode_zero_eval: F) -> B
     );
     replacements.insert(
         "MAX_BUS_WIDTH_PLACEHOLDER".to_string(),
-        max_bus_width_including_domainsep().to_string(),
+        (1 << LOG_MAX_BUS_WIDTH).to_string(),
     );
     replacements.insert(
         "LOGUP_MEMORY_DOMAINSEP_PLACEHOLDER".to_string(),
         LOGUP_MEMORY_DOMAINSEP.to_string(),
-    );
-    replacements.insert(
-        "LOGUP_PRECOMPILE_DOMAINSEP_PLACEHOLDER".to_string(),
-        LOGUP_PRECOMPILE_DOMAINSEP.to_string(),
     );
     replacements.insert(
         "LOGUP_BYTECODE_DOMAINSEP_PLACEHOLDER".to_string(),
@@ -262,54 +262,104 @@ pub fn build_replacements(log_inner_bytecode: usize, bytecode_zero_eval: F) -> B
         "LOG_GUEST_BYTECODE_LEN_PLACEHOLDER".to_string(),
         log_inner_bytecode.to_string(),
     );
-    replacements.insert("COL_PC_PLACEHOLDER".to_string(), COL_PC.to_string());
+    replacements.insert("COL_PC_PLACEHOLDER".to_string(), EXEC_COL_PC.to_string());
     let bytecode_point_n_vars = log_inner_bytecode + log2_ceil_usize(N_INSTRUCTION_COLUMNS);
     replacements.insert(
         "BYTECODE_SUMCHECK_PROOF_SIZE_PLACEHOLDER".to_string(),
         bytecode_reduction_sumcheck_proof_size(bytecode_point_n_vars).to_string(),
     );
 
-    let mut lookup_indexes_str = vec![];
-    let mut lookup_values_str = vec![];
+    let mut one_buses_domseps = vec![];
+    let mut one_buses_data_cols = vec![];
+    let mut one_buses_data_offsets = vec![];
+    let mut one_buses_new_cols = vec![];
     let mut num_cols_air = vec![];
     let mut air_degrees = vec![];
     let mut n_air_columns = vec![];
     let mut n_air_shift_columns = vec![];
+    let mut n_air_constraints = vec![];
+    let mut one_buses_all_cols = vec![];
     for table in ALL_TABLES {
-        let this_look_f_indexes_str = table
-            .lookups()
-            .iter()
-            .map(|lookup_f| lookup_f.index.to_string())
-            .collect::<Vec<_>>();
-        lookup_indexes_str.push(format!("[{}]", this_look_f_indexes_str.join(", ")));
+        let mut table_domseps = vec![];
+        let mut table_data_cols = vec![];
+        let mut table_data_offsets = vec![];
+        let mut table_new_cols = vec![];
+        let mut seen_cols: HashSet<ColIndex> = HashSet::new();
+        for bus in table.bus_interactions() {
+            if !matches!(bus.multiplicity, BusMultiplicity::One) {
+                continue;
+            }
+            let BusData::Constant(domsep) = bus.domainsep else {
+                panic!("Multiplicity::One bus domsep must be a constant");
+            };
+            let mut data_cols = vec![];
+            let mut data_offsets = vec![];
+            let mut new_cols = vec![];
+            for entry in &bus.data {
+                let (col, ofs) = match entry {
+                    BusData::Column(c) => (*c, 0),
+                    BusData::ColumnPlusConstant(c, o) => (*c, *o),
+                    BusData::Constant(_) => panic!("Multiplicity::One bus data must be a column"),
+                };
+                data_cols.push(col);
+                data_offsets.push(ofs);
+                if seen_cols.insert(col) {
+                    new_cols.push(col);
+                }
+            }
+            table_domseps.push(domsep.to_string());
+            table_data_cols.push(format!(
+                "[{}]",
+                data_cols.iter().map(usize::to_string).collect::<Vec<_>>().join(", ")
+            ));
+            table_data_offsets.push(format!(
+                "[{}]",
+                data_offsets.iter().map(usize::to_string).collect::<Vec<_>>().join(", ")
+            ));
+            table_new_cols.push(format!(
+                "[{}]",
+                new_cols.iter().map(usize::to_string).collect::<Vec<_>>().join(", ")
+            ));
+        }
+        one_buses_domseps.push(format!("[{}]", table_domseps.join(", ")));
+        one_buses_data_cols.push(format!("[{}]", table_data_cols.join(", ")));
+        one_buses_data_offsets.push(format!("[{}]", table_data_offsets.join(", ")));
+        one_buses_new_cols.push(format!("[{}]", table_new_cols.join(", ")));
+
+        let mut sorted_seen: Vec<ColIndex> = seen_cols.iter().copied().collect();
+        sorted_seen.sort();
+        one_buses_all_cols.push(format!(
+            "[{}]",
+            sorted_seen.iter().map(usize::to_string).collect::<Vec<_>>().join(", ")
+        ));
+
         num_cols_air.push(table.n_columns().to_string());
-        let this_lookup_f_values_str = table
-            .lookups()
-            .iter()
-            .map(|lookup_f| {
-                format!(
-                    "[{}]",
-                    lookup_f
-                        .values
-                        .iter()
-                        .map(|v| v.to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
-            })
-            .collect::<Vec<_>>();
-        lookup_values_str.push(format!("[{}]", this_lookup_f_values_str.join(", ")));
         air_degrees.push(table.degree_air().to_string());
         n_air_columns.push(table.n_columns().to_string());
         n_air_shift_columns.push(table.n_shift_columns().to_string());
+        n_air_constraints.push(table.n_constraints().to_string());
     }
+    let max_num_cols_air = ALL_TABLES.iter().map(|t| t.n_columns()).max().unwrap();
+    replacements.insert("MAX_NUM_COLS_AIR_PLACEHOLDER".to_string(), max_num_cols_air.to_string());
     replacements.insert(
-        "LOOKUPS_INDEXES_PLACEHOLDER".to_string(),
-        format!("[{}]", lookup_indexes_str.join(", ")),
+        "ONE_BUSES_ALL_COLS_PLACEHOLDER".to_string(),
+        format!("[{}]", one_buses_all_cols.join(", ")),
     );
     replacements.insert(
-        "LOOKUPS_VALUES_PLACEHOLDER".to_string(),
-        format!("[{}]", lookup_values_str.join(", ")),
+        "ONE_BUSES_DOMSEPS_PLACEHOLDER".to_string(),
+        format!("[{}]", one_buses_domseps.join(", ")),
+    );
+    replacements.insert(
+        "ONE_BUSES_DATA_COLS_PLACEHOLDER".to_string(),
+        format!("[{}]", one_buses_data_cols.join(", ")),
+    );
+    replacements.insert(
+        "ONE_BUSES_DATA_OFFSETS_PLACEHOLDER".to_string(),
+        format!("[{}]", one_buses_data_offsets.join(", ")),
+    );
+    replacements.insert(
+        "ONE_BUSES_NEW_COLS_PLACEHOLDER".to_string(),
+        format!("[{}]", one_buses_new_cols.join(", ")),
     );
     replacements.insert(
         "NUM_COLS_AIR_PLACEHOLDER".to_string(),
@@ -320,8 +370,22 @@ pub fn build_replacements(log_inner_bytecode: usize, bytecode_zero_eval: F) -> B
         Table::execution().index().to_string(),
     );
     replacements.insert(
-        "MAX_NUM_AIR_CONSTRAINTS_PLACEHOLDER".to_string(),
-        max_air_constraints().to_string(),
+        "TOTAL_NUM_AIR_CONSTRAINTS_PLACEHOLDER".to_string(),
+        total_air_constraints().to_string(),
+    );
+    replacements.insert(
+        "N_AIR_CONSTRAINTS_PLACEHOLDER".to_string(),
+        format!("[{}]", n_air_constraints.join(", ")),
+    );
+    let mut air_alpha_offsets = Vec::with_capacity(n_air_constraints.len());
+    let mut cumul: usize = 0;
+    for s in &n_air_constraints {
+        air_alpha_offsets.push(cumul.to_string());
+        cumul += s.parse::<usize>().unwrap();
+    }
+    replacements.insert(
+        "AIR_ALPHA_OFFSETS_PLACEHOLDER".to_string(),
+        format!("[{}]", air_alpha_offsets.join(", ")),
     );
     replacements.insert(
         "AIR_DEGREES_PLACEHOLDER".to_string(),
@@ -357,6 +421,35 @@ pub fn build_replacements(log_inner_bytecode: usize, bytecode_zero_eval: F) -> B
     );
     replacements.insert("STARTING_PC_PLACEHOLDER".to_string(), STARTING_PC.to_string());
     replacements.insert("ENDING_PC_PLACEHOLDER".to_string(), ending_pc.to_string());
+
+    // XMSS-specific replacements
+    replacements.insert("V_PLACEHOLDER".to_string(), V.to_string());
+    replacements.insert("W_PLACEHOLDER".to_string(), W.to_string());
+    replacements.insert("TARGET_SUM_PLACEHOLDER".to_string(), TARGET_SUM.to_string());
+    replacements.insert("LOG_LIFETIME_PLACEHOLDER".to_string(), LOG_LIFETIME.to_string());
+    replacements.insert("MESSAGE_LEN_PLACEHOLDER".to_string(), MESSAGE_LEN_FE.to_string());
+    replacements.insert("RANDOMNESS_LEN_PLACEHOLDER".to_string(), RANDOMNESS_LEN_FE.to_string());
+    replacements.insert(
+        "PUBLIC_PARAM_LEN_FE_PLACEHOLDER".to_string(),
+        PUBLIC_PARAM_LEN_FE.to_string(),
+    );
+    replacements.insert(
+        "MERKLE_LEVELS_PER_CHUNK_PLACEHOLDER".to_string(),
+        MERKLE_LEVELS_PER_CHUNK_FOR_SLOT.to_string(),
+    );
+    replacements.insert("XMSS_DIGEST_LEN_PLACEHOLDER".to_string(), XMSS_DIGEST_LEN.to_string());
+
+    replacements.insert("TYPE_1_FLAG_PLACEHOLDER".to_string(), TYPE1_FLAG.to_string());
+    replacements.insert("TYPE_2_FLAG_PLACEHOLDER".to_string(), TYPE2_FLAG.to_string());
+    replacements.insert(
+        "MAX_XMSS_AGGREGATED_PLACEHOLDER".to_string(),
+        MAX_XMSS_AGGREGATED.to_string(),
+    );
+    replacements.insert(
+        "MAX_XMSS_DUPLICATES_PLACEHOLDER".to_string(),
+        MAX_XMSS_DUPLICATES.to_string(),
+    );
+    replacements.insert("MAX_RECURSIONS_PLACEHOLDER".to_string(), MAX_RECURSIONS.to_string());
 
     // Bytecode zero eval
     replacements.insert(
@@ -460,11 +553,13 @@ fn air_eval_in_zk_dsl<T: TableT>(table: T) -> String
 where
     T::ExtraData: Default,
 {
-    let (constraints, bus_flag, bus_data) = get_symbolic_constraints_and_bus_data_values::<F, _>(&table);
+    let (constraints, bus_multiplicity, bus_data) = get_symbolic_constraints_and_bus_data_values::<F, _>(&table);
+    // `bus_data`'s last entry is the domainsep (logup domain separation).
+    let (bus_domainsep, bus_real_data) = bus_data.split_last().unwrap();
     let mut ctx = AirCodegenCtx::new();
 
     let mut res = format!(
-        "def evaluate_air_constraints_table_{}({}, air_alpha_powers, bus_beta, logup_alphas_eq_poly):\n",
+        "def evaluate_air_constraints_table_{}({}, air_alpha_powers, logup_alphas_eq_poly):\n",
         table.table().index(),
         AIR_INNER_VALUES_VAR
     );
@@ -477,29 +572,36 @@ where
     }
 
     // first: bus data
-    let flag = eval_air_constraint(bus_flag, None, &mut ctx, &mut res);
-    res += &format!("\n    buff = Array(DIM * {})", bus_data.len());
-    for (i, data) in bus_data.iter().enumerate() {
+    let multiplicity = eval_air_constraint(bus_multiplicity, None, &mut ctx, &mut res);
+    res += &format!("\n    buff = Array(DIM * {})", bus_real_data.len());
+    for (i, data) in bus_real_data.iter().enumerate() {
         let data_str = eval_air_constraint(*data, None, &mut ctx, &mut res);
         res += &format!("\n    copy_5({}, buff + DIM * {})", data_str, i);
     }
-    // dot product: bus_res = sum(buff[i] * logup_alphas_eq_poly[i]) for i in 0..bus_data.len()
+    let domainsep_str = eval_air_constraint(*bus_domainsep, None, &mut ctx, &mut res);
+    // bus_res = sum(buff[i] * logup_alphas_eq_poly[i]) + disc * logup_alphas_eq_poly.last()
     res += "\n    bus_res_init = Array(DIM)";
     res += &format!(
         "\n    dot_product_ee(buff, logup_alphas_eq_poly, bus_res_init, {})",
-        bus_data.len()
+        bus_real_data.len()
     );
     res += &format!(
-        "\n    bus_res: Mut = add_extension_ret(mul_base_extension_ret(LOGUP_PRECOMPILE_DOMAINSEP, logup_alphas_eq_poly + {} * DIM), bus_res_init)",
-        max_bus_width_including_domainsep().next_power_of_two() - 1
+        "\n    bus_res: Mut = add_extension_ret(mul_extension_ret({}, logup_alphas_eq_poly + {} * DIM), bus_res_init)",
+        domainsep_str,
+        (1 << LOG_MAX_BUS_WIDTH) - 1
     );
-    res += "\n    bus_res = mul_extension_ret(bus_res, bus_beta)";
-    res += &format!("\n    sum: Mut = add_extension_ret(bus_res, {})", flag);
+    // `air_alpha_powers` is the slice [alpha^offset, alpha^{offset+1}, …] for this table.
+    // Multiplicity → slot 0, bus fingerprint → slot 1, remaining AIR constraints → slot 2+.
+    res += "\n    bus_res = mul_extension_ret(bus_res, air_alpha_powers + DIM)";
+    res += &format!(
+        "\n    weighted_multiplicity = mul_extension_ret(air_alpha_powers, {})",
+        multiplicity
+    );
+    res += "\n    sum: Mut = add_extension_ret(bus_res, weighted_multiplicity)";
 
-    // Batch constraint weighting: single dot_product_ee(alpha_powers, constraints_buf, result, n_constraints)
     res += "\n    weighted_constraints = Array(DIM)";
     res += &format!(
-        "\n    dot_product_ee(air_alpha_powers + DIM, constraints_buf, weighted_constraints, {})",
+        "\n    dot_product_ee(air_alpha_powers + 2 * DIM, constraints_buf, weighted_constraints, {})",
         n_constraints
     );
     res += "\n    sum = add_extension_ret(sum, weighted_constraints)";

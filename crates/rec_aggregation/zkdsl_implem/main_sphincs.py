@@ -3,7 +3,6 @@ from hashing import *
 from sphincs_aggregate import *
 
 MAX_N_SIGS = 2**12
-MAX_LOG_N_SIGS = 12
 
 
 def main():
@@ -13,16 +12,11 @@ def main():
 
     Public input (8 FEs at address 0):
         hash of [ n_sigs(1) | pubkeys(n_sigs x DIGEST_LEN) | messages(n_sigs x MESSAGE_LEN) ]  # MESSAGE_LEN = 8
-        The commitment is built by chaining Poseidon absorptions without copying:
-            h0 = poseidon(ZERO_VEC, [n_sigs, 0, 0, ..., 0])
-            h1 = slice_hash_with_iv_dynamic_unroll(pubkeys, ...) continued from h0
-            h2 = continued absorption of messages
-
         Because no DSL primitive takes an incoming state for dynamic hashing, we
         hash each segment independently and then chain the three digests:
             segment_nsigs    = poseidon(ZERO_VEC, [n_sigs, 0, ..., 0])
-            segment_pubkeys  = slice_hash_with_iv_dynamic_unroll(pubkeys, n_sigs * DIGEST_LEN, ...)
-            segment_messages = slice_hash_with_iv_dynamic_unroll(messages, n_sigs * MESSAGE_LEN, ...)
+            segment_pubkeys  = slice_hash_runtime(pubkeys, n_sigs)    # n_sigs chunks of DIGEST_LEN
+            segment_messages = slice_hash_runtime(messages, n_sigs)   # n_sigs chunks of MESSAGE_LEN
             commitment       = poseidon(poseidon(segment_nsigs, segment_pubkeys), segment_messages)
 
     Private witness hints (consumed in order):
@@ -59,9 +53,9 @@ def main():
     seg_nsigs = Array(DIGEST_LEN)
     poseidon16_compress(ZERO_VEC_PTR, n_sigs_chunk, seg_nsigs)
 
-    seg_pubkeys = slice_hash_with_iv_dynamic_unroll(pubkeys, n_sigs, MAX_LOG_N_SIGS + 4)
+    seg_pubkeys = slice_hash_runtime(pubkeys, n_sigs)
 
-    seg_messages = slice_hash_with_iv_dynamic_unroll(messages, n_sigs, MAX_LOG_N_SIGS + 4)
+    seg_messages = slice_hash_runtime(messages, n_sigs)
 
     h01 = Array(DIGEST_LEN)
     poseidon16_compress(seg_nsigs, seg_pubkeys, h01)

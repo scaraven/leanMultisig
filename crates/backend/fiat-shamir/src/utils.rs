@@ -14,15 +14,20 @@ pub fn flatten_scalars_to_base<F: Field, EF: ExtensionField<F>>(scalars: &[EF]) 
 }
 
 pub fn pack_scalars_to_extension<F: Field, EF: ExtensionField<F>>(scalars: &[F]) -> Vec<EF> {
+    try_pack_scalars_to_extension(scalars).expect("Scalars length must be a multiple of the extension size")
+}
+
+pub fn try_pack_scalars_to_extension<F: Field, EF: ExtensionField<F>>(scalars: &[F]) -> Option<Vec<EF>> {
     let extension_size = <EF as BasedVectorSpace<F>>::DIMENSION;
-    assert!(
-        scalars.len().is_multiple_of(extension_size),
-        "Scalars length must be a multiple of the extension size"
-    );
-    scalars
-        .chunks_exact(extension_size)
-        .map(|chunk| EF::from_basis_coefficients_slice(chunk).unwrap())
-        .collect()
+    if !scalars.len().is_multiple_of(extension_size) {
+        return None;
+    }
+    Some(
+        scalars
+            .chunks_exact(extension_size)
+            .map(|chunk| EF::from_basis_coefficients_slice(chunk).unwrap())
+            .collect(),
+    )
 }
 
 /// Expand a bare polynomial h(X) into the full polynomial g(X) = eq(α, X) * h(X).

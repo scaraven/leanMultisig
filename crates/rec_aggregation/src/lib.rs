@@ -7,7 +7,9 @@ use utils::poseidon_compress_slice;
 
 pub mod benchmark;
 mod bytecode_claims;
+
 pub mod compilation;
+mod error;
 pub mod sphincs;
 mod type_1_aggregation;
 mod type_2_aggregation;
@@ -16,7 +18,8 @@ use backend::{Evaluation, Proof, ProofError, RawProof};
 pub use compilation::{
     MAX_RECURSIONS, MAX_XMSS_AGGREGATED, MAX_XMSS_DUPLICATES, NUM_REPEATED_ONES, PREAMBLE_MEMORY_LEN, ZERO_VEC_LEN,
 };
-
+pub use error::AggregationError;
+pub use lean_prover::ProverError;
 use lean_vm::{DIGEST_LEN, EF, F};
 pub use type_1_aggregation::{TypeOneInfo, TypeOneMultiSignature, aggregate_type_1, verify_type_1};
 pub use type_2_aggregation::{
@@ -29,10 +32,23 @@ pub struct InnerVerified {
     pub input_data_hash: [F; DIGEST_LEN],
     pub bytecode_evaluation: Evaluation<EF>,
     pub raw_proof: RawProof<F>,
+    pub sorted_table_perm: Vec<usize>,
+}
+
+// The LZ4 size prefix is attacker-controlled; cap it before allocating. Real
+// multisigs compress to ~1x (high-entropy proof + hashes), so 8x is ample.
+const MAX_DECOMPRESS_RATIO: usize = 8;
+
+pub(crate) fn decompress_size_prepended_bounded(bytes: &[u8]) -> Option<Vec<u8>> {
+    let declared = u32::from_le_bytes(bytes.get(..4)?.try_into().ok()?) as usize;
+    if declared > bytes.len().saturating_mul(MAX_DECOMPRESS_RATIO) {
+        return None;
+    }
+    lz4_flex::decompress_size_prepended(bytes).ok()
 }
 
 pub(crate) fn verify_inner(input_data: Vec<F>, proof: Proof<F>) -> Result<InnerVerified, ProofError> {
-    let input_data_hash = poseidon_compress_slice(&input_data, true);
+    let input_data_hash = poseidon_compress_slice(&input_data);
     let bytecode = get_aggregation_bytecode();
     let (verif, raw_proof) = verify_execution(bytecode, &input_data_hash, proof)?;
     Ok(InnerVerified {
@@ -40,5 +56,6 @@ pub(crate) fn verify_inner(input_data: Vec<F>, proof: Proof<F>) -> Result<InnerV
         input_data_hash,
         bytecode_evaluation: verif.bytecode_evaluation,
         raw_proof,
+        sorted_table_perm: verif.sorted_table_perm,
     })
 }

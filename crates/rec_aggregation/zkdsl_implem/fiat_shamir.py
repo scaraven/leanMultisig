@@ -9,9 +9,11 @@ from utils import *
 # This matches the normal-ordering poseidon precompile output [cap | rate].
 
 
-def fs_new(transcript_ptr):
+@inline
+def fs_new(transcript_ptr, initial_capacity):
     fs = Array(17)
-    set_to_16_zeros(fs)
+    copy_8(fs, initial_capacity)
+    set_to_8_zeros(fs + 8)
     fs[16] = transcript_ptr
     return fs
 
@@ -64,7 +66,7 @@ def assert_trailing_bits_are_zeros(value, bits: Const):
     debug_assert(bits != 0)
 
     chunk_size = 12
-    num_chunks = 24 / chunk_size # 2
+    num_chunks = 24 / chunk_size  # 2
 
     chunks = Array(num_chunks)
     hint_decompose_bits_merkle_whir(chunks, value, chunk_size)
@@ -74,20 +76,20 @@ def assert_trailing_bits_are_zeros(value, bits: Const):
     partial_sums = Array(num_chunks)
     partial_sums[0] = chunks[0]
     for i in unroll(1, num_chunks):
-        partial_sums[i] = partial_sums[i - 1] + chunks[i] * 2**(i * chunk_size)
+        partial_sums[i] = partial_sums[i - 1] + chunks[i] * 2 ** (i * chunk_size)
     # p = 2^31 - 2^24 + 1, so 2^24 * 127 = p - 1 ≡ -1 (mod p), hence inv(2^24) = -127.
     # Deduce top7 from the identity partial_sum + top7 * 2^24 == a:
     # top7 = (a - partial_sum) * inv(2^24) = (partial_sum - a) * 127
     top7 = (partial_sums[num_chunks - 1] - value) * 127
     assert top7 < 2**7
     if top7 == 2**7 - 1:
-        assert partial_sums[chunk_size - 1] == 0
+        assert partial_sums[num_chunks - 1] == 0
 
     if bits < 12:
-        assert chunks[0] / 2**bits < 2**(chunk_size - bits)
+        assert chunks[0] / 2**bits < 2 ** (chunk_size - bits)
     elif bits < 24:
         assert chunks[0] == 0
-        assert chunks[1] / 2**(bits - 12) < 2**(chunk_size - (bits - 12))
+        assert chunks[1] / 2 ** (bits - 12) < 2 ** (chunk_size - (bits - 12))
     else:
         debug_assert(bits == 24)
         assert chunks[0] == 0
@@ -175,8 +177,8 @@ def fs_receive_ef_inlined(fs, n):
 def fs_receive_ef_by_log_dynamic(fs, log_n, min_value: Const, max_value: Const):
     debug_assert(log_n < max_value)
     debug_assert(min_value <= log_n)
-    new_fs: Imu
-    ef_ptr: Imu
+    new_fs: Imm
+    ef_ptr: Imm
     new_fs, ef_ptr = match_range(log_n, range(min_value, max_value), lambda ln: fs_receive_ef(fs, 2**ln))
     return new_fs, ef_ptr
 

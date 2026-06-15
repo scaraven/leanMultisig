@@ -1,14 +1,13 @@
+use crate::error::AggregationError;
 use backend::*;
-use lean_prover::ProverError;
-use lean_prover::SNARK_DOMAIN_SEP;
 use lean_prover::default_whir_config;
+use lean_prover::fiat_shamir_domain_sep;
 use lean_prover::prove_execution::ExecutionProof;
 use lean_prover::prove_execution::prove_execution;
 use lean_vm::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use utils::poseidon_compress_slice;
-use utils::poseidon16_compress_pair;
 
 use crate::InnerVerified;
 use crate::bytecode_claims::compute_bytecode_value_at;
@@ -16,8 +15,12 @@ use crate::bytecode_claims::flatten_bytecode_claim;
 use crate::bytecode_claims::reduce_bytecode_claims;
 use crate::compilation::{
     BYTECODE_CLAIM_OFFSET, MAX_RECURSIONS, PREAMBLE_MEMORY_LEN, TYPE2_FLAG, get_aggregation_bytecode,
+    try_get_aggregation_bytecode,
 };
-use crate::type_1_aggregation::{TypeOneInfo, TypeOneMultiSignature, extract_merkle_hint_blobs, verify_type_1};
+use crate::decompress_size_prepended_bounded;
+use crate::type_1_aggregation::{
+    TypeOneInfo, TypeOneMultiSignature, check_type_one_pubkeys, extract_merkle_hint_blobs, verify_type_1,
+};
 use crate::verify_inner;
 
 /// A bundle of `n` type-1 multi-signatures with potentially distinct (message, slot) per component, attested by a single snark.
@@ -38,7 +41,9 @@ impl<'de> Deserialize<'de> for TypeTwoMultiSignature {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let (info, bytecode_claim_point, proof) =
             <(Vec<TypeOneInfo>, MultilinearPoint<EF>, ExecutionProof)>::deserialize(d)?;
-        if bytecode_claim_point.len() != get_aggregation_bytecode().cumulated_n_vars() {
+        let bytecode =
+            try_get_aggregation_bytecode().ok_or_else(|| serde::de::Error::custom("bytecode not initialized"))?;
+        if bytecode_claim_point.len() != bytecode.cumulated_n_vars() {
             return Err(serde::de::Error::custom("invalid bytecode point"));
         }
         let bytecode_value = compute_bytecode_value_at(&bytecode_claim_point);
@@ -57,8 +62,9 @@ impl TypeTwoMultiSignature {
     }
 
     pub fn decompress(bytes: &[u8]) -> Option<Self> {
-        let decompressed = lz4_flex::decompress_size_prepended(bytes).ok()?;
-        postcard::from_bytes(&decompressed).ok()
+        let decompressed = decompress_size_prepended_bounded(bytes)?;
+        let (value, rest) = postcard::take_from_bytes::<Self>(&decompressed).ok()?;
+        rest.is_empty().then_some(value)
     }
 
     pub(crate) fn bytecode_claim_flat(&self) -> Vec<F> {
@@ -66,7 +72,7 @@ impl TypeTwoMultiSignature {
     }
 }
 
-/// Layout: [prefix(8) | bytecode_claim_padded | bytecode_hash_domsep(8) | n × digest(8)].
+/// Layout: [prefix(8) | bytecode_claim_padded | initial_fiat_shamir_cap(8) | n × digest(8)].
 fn build_type2_input_data(digests: &[[F; DIGEST_LEN]], bytecode_claim_flat: &[F]) -> Vec<F> {
     let n = digests.len();
     let claim_padded = bytecode_claim_flat.len().next_multiple_of(DIGEST_LEN);
@@ -79,8 +85,7 @@ fn build_type2_input_data(digests: &[[F; DIGEST_LEN]], bytecode_claim_flat: &[F]
     // data[2..8] stays zero (prefix-chunk pad).
 
     data[BYTECODE_CLAIM_OFFSET..][..bytecode_claim_flat.len()].copy_from_slice(bytecode_claim_flat);
-    let bytecode_hash = &get_aggregation_bytecode().hash;
-    let domsep = poseidon16_compress_pair(bytecode_hash, &SNARK_DOMAIN_SEP);
+    let domsep = fiat_shamir_domain_sep(get_aggregation_bytecode());
     data[domsep_offset..][..DIGEST_LEN].copy_from_slice(&domsep);
 
     for (i, d) in digests.iter().enumerate() {
@@ -93,26 +98,30 @@ fn build_type2_input_data(digests: &[[F; DIGEST_LEN]], bytecode_claim_flat: &[F]
 pub fn merge_many_type_1(
     types_1: Vec<TypeOneMultiSignature>,
     log_inv_rate: usize,
-) -> Result<TypeTwoMultiSignature, ProverError> {
+) -> Result<TypeTwoMultiSignature, AggregationError> {
     let n_components = types_1.len();
-    assert!(n_components > 0, "merge_many_type_1 requires at least one input");
-    assert!(
-        n_components <= MAX_RECURSIONS,
-        "merge_many_type_1: at most {MAX_RECURSIONS} components are supported"
-    );
+    if n_components == 0 {
+        return Err(AggregationError::EmptyAggregation {
+            what: "type-1 components",
+        });
+    }
+    if n_components > MAX_RECURSIONS {
+        return Err(AggregationError::LimitExceeded {
+            what: "type-1 components",
+            actual: n_components,
+            max: MAX_RECURSIONS,
+        });
+    }
     let whir_config = default_whir_config(log_inv_rate);
     let bytecode = get_aggregation_bytecode();
 
-    let verified_children: Vec<InnerVerified> = types_1
-        .iter()
-        .map(|sig| verify_type_1(sig).expect("component proof failed to verify"))
-        .collect();
+    let verified_children: Vec<InnerVerified> = types_1.iter().map(verify_type_1).collect::<Result<_, _>>()?;
 
     let reduced_claims = reduce_bytecode_claims(&verified_children);
 
     let digests: Vec<[F; DIGEST_LEN]> = verified_children.iter().map(|v| v.input_data_hash).collect();
     let pub_input_data = build_type2_input_data(&digests, &reduced_claims.final_claim_flat());
-    let public_input_digest = poseidon_compress_slice(&pub_input_data, true).to_vec();
+    let public_input_digest = poseidon_compress_slice(&pub_input_data);
 
     let bytecode_value_hint_blobs: Vec<Vec<F>> = verified_children
         .iter()
@@ -122,6 +131,10 @@ pub fn merge_many_type_1(
     let proof_transcript_blobs: Vec<Vec<F>> = verified_children
         .iter()
         .map(|v| v.raw_proof.transcript.clone())
+        .collect();
+    let table_sort_perm_blobs: Vec<Vec<F>> = verified_children
+        .iter()
+        .map(|v| v.sorted_table_perm.iter().map(|&i| F::from_usize(i)).collect())
         .collect();
     let (merkle_leaf_blobs, merkle_path_blobs) =
         extract_merkle_hint_blobs(verified_children.iter().map(|v| &v.raw_proof));
@@ -142,6 +155,7 @@ pub fn merge_many_type_1(
             .collect(),
     );
     hints.insert("proof_transcript".to_string(), proof_transcript_blobs);
+    hints.insert("table_sort_perm".to_string(), table_sort_perm_blobs);
     hints.insert("merkle_leaf".to_string(), merkle_leaf_blobs);
     hints.insert("merkle_path".to_string(), merkle_path_blobs);
     hints.insert(
@@ -152,6 +166,7 @@ pub fn merge_many_type_1(
     let witness = ExecutionWitness {
         preamble_memory_len: PREAMBLE_MEMORY_LEN,
         hints,
+        min_table_log_n_rows: Default::default(),
     };
     let execution_proof = prove_execution(bytecode, &public_input_digest, &witness, &whir_config, false)?;
 
@@ -166,10 +181,13 @@ pub fn verify_type_2(sig: &TypeTwoMultiSignature) -> Result<InnerVerified, Proof
     if sig.info.is_empty() || sig.info.len() > MAX_RECURSIONS {
         return Err(ProofError::InvalidProof);
     }
+    for info in &sig.info {
+        check_type_one_pubkeys(&info.pubkeys).map_err(|_| ProofError::InvalidProof)?;
+    }
     let digests = sig
         .info
         .iter()
-        .map(|info| poseidon_compress_slice(&info.build_input_data(), true))
+        .map(|info| poseidon_compress_slice(&info.build_input_data()))
         .collect::<Vec<_>>();
     let input_data = build_type2_input_data(&digests, &sig.bytecode_claim_flat());
     verify_inner(input_data, sig.proof.proof.clone())
@@ -179,12 +197,12 @@ pub fn split_type_2_by_msg(
     type_2: TypeTwoMultiSignature,
     msg: [F; DIGEST_LEN],
     log_inv_rate: usize,
-) -> Result<TypeOneMultiSignature, ProverError> {
+) -> Result<TypeOneMultiSignature, AggregationError> {
     let Some(index) = type_2.info.iter().position(|info| info.message == msg) else {
-        return Err(ProverError::UnknownMessage);
+        return Err(AggregationError::UnknownMessage);
     };
     if type_2.info.iter().filter(|info| info.message == msg).count() > 1 {
-        return Err(ProverError::MultipleMessages);
+        return Err(AggregationError::MultipleMessages);
     }
     split_type_2(type_2, index, log_inv_rate)
 }
@@ -195,25 +213,35 @@ pub fn split_type_2(
     type_2: TypeTwoMultiSignature,
     index: usize,
     log_inv_rate: usize,
-) -> Result<TypeOneMultiSignature, ProverError> {
+) -> Result<TypeOneMultiSignature, AggregationError> {
     let n_components = type_2.info.len();
-    assert!(index < n_components, "split index {index} out of bounds");
-    assert!(
-        n_components <= MAX_RECURSIONS,
-        "split_type_2: at most {MAX_RECURSIONS} components are supported"
-    );
+    if index >= n_components {
+        return Err(AggregationError::InvalidSplitIndex { index, n_components });
+    }
+    if n_components > MAX_RECURSIONS {
+        return Err(AggregationError::LimitExceeded {
+            what: "type-2 components",
+            actual: n_components,
+            max: MAX_RECURSIONS,
+        });
+    }
     let whir_config = default_whir_config(log_inv_rate);
     let bytecode = get_aggregation_bytecode();
 
-    let outer_verified = verify_type_2(&type_2).expect("type-2 outer proof failed to verify");
+    let outer_verified = verify_type_2(&type_2)?;
 
     let reduced_claims = reduce_bytecode_claims(std::slice::from_ref(&outer_verified));
     let bytecode_value_hint_blob = flatten_scalars_to_base(&[outer_verified.bytecode_evaluation.value]);
+    let table_sort_perm_blob: Vec<F> = outer_verified
+        .sorted_table_perm
+        .iter()
+        .map(|&i| F::from_usize(i))
+        .collect();
 
     let mut outer_type_1 = type_2.info[index].clone();
     outer_type_1.bytecode_claim = reduced_claims.final_claim.clone();
     let ourer_input_data = outer_type_1.build_input_data();
-    let outer_digest = poseidon_compress_slice(&ourer_input_data, true);
+    let outer_digest = poseidon_compress_slice(&ourer_input_data);
 
     let inner_input_data: Vec<F> = type_2.info[index].build_input_data();
 
@@ -238,6 +266,7 @@ pub fn split_type_2(
     hints.insert("bytecode_value_hint".to_string(), vec![bytecode_value_hint_blob]);
     hints.insert("proof_transcript_size".to_string(), vec![proof_transcript_size]);
     hints.insert("proof_transcript".to_string(), vec![proof_transcript]);
+    hints.insert("table_sort_perm".to_string(), vec![table_sort_perm_blob]);
     hints.insert("merkle_leaf".to_string(), merkle_leaf_blobs);
     hints.insert("merkle_path".to_string(), merkle_path_blobs);
     hints.insert(
@@ -248,6 +277,7 @@ pub fn split_type_2(
     let witness = ExecutionWitness {
         preamble_memory_len: PREAMBLE_MEMORY_LEN,
         hints,
+        min_table_log_n_rows: Default::default(),
     };
     let execution_proof = prove_execution(bytecode, &outer_digest, &witness, &whir_config, false)?;
 

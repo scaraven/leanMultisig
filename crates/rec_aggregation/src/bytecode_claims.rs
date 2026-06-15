@@ -1,6 +1,7 @@
 use backend::*;
+use lean_prover::fiat_shamir_domain_sep;
 use lean_vm::*;
-use utils::{build_prover_state, get_poseidon16, poseidon_compress_slice, poseidon16_compress_pair};
+use utils::{get_poseidon16, poseidon_compress_slice, poseidon16_compress_pair};
 
 use crate::compilation::BYTECODE_CLAIM_OFFSET;
 use crate::{InnerVerified, get_aggregation_bytecode};
@@ -54,7 +55,9 @@ pub(crate) fn reduce_bytecode_claims(verified: &[InnerVerified]) -> ReducedBytec
     }
     let claims_hash = hash_bytecode_claims(&claims);
 
-    let mut reduction_prover = build_prover_state();
+    let mut reduction_capacity = fiat_shamir_domain_sep(bytecode);
+    reduction_capacity[0] += F::ONE; // Domain-separate this sub-protocol's Fiat-Shamir from the main snark
+    let mut reduction_prover = ProverState::new(get_poseidon16().clone(), reduction_capacity);
     reduction_prover.add_base_scalars(&claims_hash);
     let alpha: EF = reduction_prover.sample();
 
@@ -87,7 +90,12 @@ pub(crate) fn reduce_bytecode_claims(verified: &[InnerVerified]) -> ReducedBytec
     assert_eq!(bytecode_claim_output.len(), bytecode.bytecode_claim_size());
 
     let sumcheck_transcript = {
-        let mut vs = VerifierState::<EF, _>::new(reduction_prover.into_proof(), get_poseidon16().clone()).unwrap();
+        let mut vs = VerifierState::<EF, _>::new(
+            reduction_prover.into_proof(),
+            get_poseidon16().clone(),
+            reduction_capacity,
+        )
+        .unwrap();
         vs.next_base_scalars_vec(claims_hash.len()).unwrap();
         let _: EF = vs.sample();
         sumcheck_verify(&mut vs, bytecode.cumulated_n_vars(), 2, claimed_sum, None).unwrap();
@@ -118,13 +126,14 @@ pub(crate) fn extract_bytecode_claim_from_input_data(
 
 pub(crate) fn hash_bytecode_claims(claims: &[Evaluation<EF>]) -> [F; DIGEST_LEN] {
     let mut running_hash = [F::ZERO; DIGEST_LEN];
+    running_hash[0] = F::from_usize(claims.len() * DIGEST_LEN);
     for eval in claims {
         let mut ef_data: Vec<EF> = eval.point.0.clone();
         ef_data.push(eval.value);
         let mut data = flatten_scalars_to_base::<F, EF>(&ef_data);
         data.resize(data.len().next_multiple_of(DIGEST_LEN), F::ZERO);
 
-        let claim_hash = poseidon_compress_slice(&data, false);
+        let claim_hash = poseidon_compress_slice(&data);
         running_hash = poseidon16_compress_pair(&running_hash, &claim_hash);
     }
     running_hash

@@ -1,4 +1,5 @@
 use std::any::TypeId;
+use std::collections::VecDeque;
 use std::iter::repeat_n;
 
 use crate::{
@@ -16,6 +17,7 @@ pub struct VerifierState<EF: ExtensionField<PF<EF>>, P> {
     challenger: Challenger<PF<EF>, P>,
     transcript: Vec<PF<EF>>,
     transcript_offset: usize,
+    pending_merkle_paths: VecDeque<PrunedMerklePaths<PF<EF>, PF<EF>>>,
     merkle_openings: Vec<MerkleOpening<PF<EF>>>,
     merkle_opening_index: usize,
     raw_transcript: Vec<PF<EF>>, // reconstructed during the proof verification, it's the format that the zkVM recursion program expects (no Merkle pruning, no sumcheck optimization to send less data, etc)
@@ -25,18 +27,13 @@ impl<EF: ExtensionField<PF<EF>>, P: Permutation<[PF<EF>; WIDTH]>> VerifierState<
 where
     PF<EF>: PrimeField64,
 {
-    pub fn new(proof: Proof<PF<EF>>, permutation: P) -> Result<Self, ProofError> {
-        let mut merkle_openings = Vec::new();
-        for paths in proof.merkle_paths {
-            let restored = Self::restore_merkle_paths(paths).ok_or(ProofError::InvalidProof)?;
-            merkle_openings.extend(restored);
-        }
-
+    pub fn new(proof: Proof<PF<EF>>, permutation: P, capacity: [PF<EF>; CAPACITY]) -> Result<Self, ProofError> {
         Ok(Self {
-            challenger: Challenger::new(permutation),
+            challenger: Challenger::new(permutation, capacity),
             transcript: proof.transcript,
             transcript_offset: 0,
-            merkle_openings,
+            pending_merkle_paths: proof.merkle_paths.into(),
+            merkle_openings: Vec::new(),
             merkle_opening_index: 0,
             raw_transcript: Vec::new(),
         })
@@ -47,6 +44,16 @@ where
             transcript: self.raw_transcript,
             merkle_openings: self.merkle_openings,
         }
+    }
+
+    pub fn check_fully_consumed(&self) -> Result<(), ProofError> {
+        if self.transcript_offset != self.transcript.len()
+            || self.merkle_opening_index != self.merkle_openings.len()
+            || !self.pending_merkle_paths.is_empty()
+        {
+            return Err(ProofError::InvalidProof);
+        }
+        Ok(())
     }
 
     fn absorb_and_record(&mut self, scalars: &[PF<EF>]) {
@@ -134,6 +141,22 @@ where
         Ok(scalars)
     }
 
+    fn begin_merkle_opening_batch(&mut self, n: usize) -> Result<(), ProofError> {
+        if self.merkle_opening_index != self.merkle_openings.len() {
+            return Err(ProofError::InvalidProof); // Previous batch must have been fully drained
+        }
+        let paths = self
+            .pending_merkle_paths
+            .pop_front()
+            .ok_or(ProofError::ExceededTranscript)?;
+        if paths.original_order.len() != n {
+            return Err(ProofError::InvalidProof);
+        }
+        let restored = Self::restore_merkle_paths(paths).ok_or(ProofError::InvalidProof)?;
+        self.merkle_openings.extend(restored);
+        Ok(())
+    }
+
     fn next_merkle_opening(&mut self) -> Result<MerkleOpening<PF<EF>>, ProofError> {
         if self.merkle_opening_index >= self.merkle_openings.len() {
             return Err(ProofError::ExceededTranscript);
@@ -152,6 +175,8 @@ where
         if self.challenger.state[CAPACITY].as_canonical_u64() & ((1 << bits) - 1) != 0 {
             return Err(ProofError::InvalidGrindingWitness);
         }
+        // On "compressed" proofs (in Rust), we assume only the first field element is pow-grinded (the RATE-1 others are zero) -> saves a bit of proof size
+        // On "raw" proofs (without Prunned merkle paths, the one used in recursion program (fiat_shamir.py) / python verifier (verifier.py) -> what's actually specified), we assume all 8 field elements are pow-grinded
         self.raw_transcript.push(witness);
         self.raw_transcript.extend(repeat_n(PF::<EF>::ZERO, RATE - 1));
         Ok(())

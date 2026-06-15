@@ -213,7 +213,11 @@ pub fn hypertree_sign(
         randomness_with_adrs[..6].copy_from_slice(&wots_sig.randomness);
         randomness_with_adrs[6] = adrs.adrs0;
         randomness_with_adrs[7] = adrs.adrs1;
-        HypertreeLayerSig { wots_sig, randomness_with_adrs, auth_path }
+        HypertreeLayerSig {
+            wots_sig,
+            randomness_with_adrs,
+            auth_path,
+        }
     });
 
     HypertreeSignature { layers }

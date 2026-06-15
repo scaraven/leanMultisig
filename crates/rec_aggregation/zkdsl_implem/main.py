@@ -11,10 +11,10 @@ TYPE_2_FLAG = TYPE_2_FLAG_PLACEHOLDER
 
 BYTECODE_SUMCHECK_PROOF_SIZE = BYTECODE_SUMCHECK_PROOF_SIZE_PLACEHOLDER
 
-# layout: [flag, count, 0×6 (8)] [bytecode_claim_padded] [bytecode_hash_domsep(8)] [type1/type2 mode-specific data]
+# layout: [flag, count, 0×6 (8)] [bytecode_claim_padded] [initial_fiat_shamir_cap(8)] [type1/type2 mode-specific data]
 BYTECODE_CLAIM_OFFSET = DIGEST_LEN  # (right after the prefix chunk)
-BYTECODE_HASH_DOMSEP_OFFSET = BYTECODE_CLAIM_OFFSET + BYTECODE_CLAIM_SIZE_PADDED
-COMPONENT_DATA_OFFSET = BYTECODE_HASH_DOMSEP_OFFSET + DIGEST_LEN
+INITIAL_FIAT_SHAMIR_CAP_OFFSET = BYTECODE_CLAIM_OFFSET + BYTECODE_CLAIM_SIZE_PADDED
+COMPONENT_DATA_OFFSET = INITIAL_FIAT_SHAMIR_CAP_OFFSET + DIGEST_LEN
 
 # Type-1 mode-specific data (fixed): pubkeys_hash | message | merkle_chunks | tweaks_hash.
 TYPE_1_PUBKEYS_HASH_OFFSET = COMPONENT_DATA_OFFSET
@@ -30,6 +30,7 @@ TYPE_2_DIGESTS_OFFSET = COMPONENT_DATA_OFFSET
 BYTECODE_CLAIM_NUM_CHUNKS = BYTECODE_CLAIM_SIZE_PADDED / DIGEST_LEN
 TYPE_2_BASE_NUM_CHUNKS = BYTECODE_CLAIM_NUM_CHUNKS + 2  # prefix chunk + domsep chunk
 
+
 def main():
     debug_assert(MAX_N_SIGS + MAX_N_DUPS <= 2**16)  # because of range checking, TODO increase
     pub_mem = 0  # See hashing.py for the memory layout
@@ -43,7 +44,7 @@ def main():
     set_to_6_zeros(data_buf + 2)
 
     bytecode_claim_output = data_buf + BYTECODE_CLAIM_OFFSET
-    bytecode_hash_domsep = data_buf + BYTECODE_HASH_DOMSEP_OFFSET
+    initial_fiat_shamir_cap = data_buf + INITIAL_FIAT_SHAMIR_CAP_OFFSET
 
     discriminator = data_buf[0]
     if discriminator == TYPE_2_FLAG:
@@ -59,15 +60,15 @@ def main():
             component_digest = data_buf + TYPE_2_DIGESTS_OFFSET + c * DIGEST_LEN
             inner_type1_buf = Array(TYPE_1_INPUT_DATA_SIZE_PADDED)
             hint_witness("component_layout", inner_type1_buf)
-            ensure_well_formed_input_data(inner_type1_buf, bytecode_hash_domsep, TYPE_1_FLAG)
-            slice_hash_with_iv(inner_type1_buf, TYPE_1_INPUT_DATA_NUM_CHUNKS, component_digest)
+            ensure_well_formed_input_data(inner_type1_buf, initial_fiat_shamir_cap, TYPE_1_FLAG)
+            slice_hash(inner_type1_buf, TYPE_1_INPUT_DATA_NUM_CHUNKS, component_digest)
 
             bytecode_claims[2 * c] = inner_type1_buf + BYTECODE_CLAIM_OFFSET
-            bytecode_claims[2 * c + 1] = recursion(component_digest, bytecode_hash_domsep)
+            bytecode_claims[2 * c + 1] = recursion(component_digest, initial_fiat_shamir_cap)
 
-        reduce_bytecode_claims(bytecode_claims, n_bytecode_claims, bytecode_claim_output)
+        reduce_bytecode_claims(bytecode_claims, n_bytecode_claims, bytecode_claim_output, initial_fiat_shamir_cap)
 
-        slice_hash_with_iv_range(data_buf, n_components + TYPE_2_BASE_NUM_CHUNKS, pub_mem)
+        slice_hash_range(data_buf, n_components + TYPE_2_BASE_NUM_CHUNKS, pub_mem)
         return
 
     assert discriminator == TYPE_1_FLAG
@@ -87,30 +88,30 @@ def main():
         type2_num_chunks = type2_n_components + TYPE_2_BASE_NUM_CHUNKS
         type2_data_buf = Array(type2_num_chunks * DIGEST_LEN)
         hint_witness("inner_type2_layout", type2_data_buf)
-        ensure_well_formed_input_data(type2_data_buf, bytecode_hash_domsep, TYPE_2_FLAG)
+        ensure_well_formed_input_data(type2_data_buf, initial_fiat_shamir_cap, TYPE_2_FLAG)
         type2_digests = type2_data_buf + TYPE_2_DIGESTS_OFFSET
-     
+
         kept_type1_buff = Array(TYPE_1_INPUT_DATA_SIZE_PADDED)
         hint_witness("kept_type1_buff", kept_type1_buff)
-        copy_8(data_buf, kept_type1_buff) # type-1 flag | n_signatures | 0×6
-        copy_32(data_buf + COMPONENT_DATA_OFFSET, kept_type1_buff + COMPONENT_DATA_OFFSET )
-        ensure_well_formed_input_data(kept_type1_buff, bytecode_hash_domsep, TYPE_1_FLAG)
+        copy_8(data_buf, kept_type1_buff)  # type-1 flag | n_signatures | 0×6
+        copy_32(data_buf + COMPONENT_DATA_OFFSET, kept_type1_buff + COMPONENT_DATA_OFFSET)
+        ensure_well_formed_input_data(kept_type1_buff, initial_fiat_shamir_cap, TYPE_1_FLAG)
         digest_kept = type2_digests + type2_kept_index * DIGEST_LEN
-        slice_hash_with_iv(kept_type1_buff, TYPE_1_INPUT_DATA_NUM_CHUNKS, digest_kept)
+        slice_hash(kept_type1_buff, TYPE_1_INPUT_DATA_NUM_CHUNKS, digest_kept)
 
         inner_pub_mem = Array(INNER_PUB_MEM_SIZE)
-        slice_hash_with_iv_range(type2_data_buf, type2_num_chunks, inner_pub_mem)
+        slice_hash_range(type2_data_buf, type2_num_chunks, inner_pub_mem)
         bytecode_claims = Array(2)
         bytecode_claims[0] = type2_data_buf + BYTECODE_CLAIM_OFFSET
-        bytecode_claims[1] = recursion(inner_pub_mem, bytecode_hash_domsep)
-        reduce_bytecode_claims(bytecode_claims, 2, bytecode_claim_output)
-        slice_hash_with_iv(data_buf, TYPE_1_INPUT_DATA_NUM_CHUNKS, pub_mem)
+        bytecode_claims[1] = recursion(inner_pub_mem, initial_fiat_shamir_cap)
+        reduce_bytecode_claims(bytecode_claims, 2, bytecode_claim_output, initial_fiat_shamir_cap)
+        slice_hash(data_buf, TYPE_1_INPUT_DATA_NUM_CHUNKS, pub_mem)
         return
 
     # ============ Standard type-1: single (message, slot) aggregation ============
     n_sigs = data_buf[1]
     assert n_sigs != 0
-    assert n_sigs - 1 < MAX_N_SIGS
+    assert n_sigs <= MAX_N_SIGS
 
     tweak_table: Mut = TWEAK_TABLE_ADDR
     hint_witness("tweak_table", tweak_table)
@@ -127,7 +128,7 @@ def main():
     assert n_recursions <= MAX_RECURSIONS
 
     n_dup = meta[1]
-    assert n_dup < MAX_N_DUPS  # TODO increase
+    assert n_dup <= MAX_N_DUPS  # TODO increase
 
     all_pubkeys = Array((n_sigs + n_dup) * PUB_KEY_SIZE)
     hint_witness("pubkeys", all_pubkeys)
@@ -138,7 +139,7 @@ def main():
     aggregate_sizes = Array(n_recursions)
     hint_witness("aggregate_sizes", aggregate_sizes)
 
-    computed_tweaks_hash = slice_hash(tweak_table, TWEAK_TABLE_SIZE_FE_PADDED / DIGEST_LEN)
+    computed_tweaks_hash = slice_hash_ret(tweak_table, TWEAK_TABLE_SIZE_FE_PADDED / DIGEST_LEN)
     copy_8(computed_tweaks_hash, tweaks_hash_expected)
 
     # 1->1 optimization: a single recursive type-1 child, no raw signatures, no duplicates.
@@ -147,20 +148,20 @@ def main():
         if n_raw_xmss == 0:
             type1_data_buf = Array(TYPE_1_INPUT_DATA_SIZE_PADDED)
             copy_8(data_buf, type1_data_buf)  # prefix
-            copy_32(data_buf + COMPONENT_DATA_OFFSET, type1_data_buf + COMPONENT_DATA_OFFSET )
+            copy_32(data_buf + COMPONENT_DATA_OFFSET, type1_data_buf + COMPONENT_DATA_OFFSET)
             hint_witness("inner_bytecode_claim", type1_data_buf + BYTECODE_CLAIM_OFFSET)
-            ensure_well_formed_input_data(type1_data_buf, bytecode_hash_domsep, TYPE_1_FLAG)
+            ensure_well_formed_input_data(type1_data_buf, initial_fiat_shamir_cap, TYPE_1_FLAG)
             inner_pub_mem = Array(INNER_PUB_MEM_SIZE)
-            slice_hash_with_iv(type1_data_buf, TYPE_1_INPUT_DATA_NUM_CHUNKS, inner_pub_mem)
+            slice_hash(type1_data_buf, TYPE_1_INPUT_DATA_NUM_CHUNKS, inner_pub_mem)
             bytecode_claims = Array(2)
             bytecode_claims[0] = type1_data_buf + BYTECODE_CLAIM_OFFSET
-            bytecode_claims[1] = recursion(inner_pub_mem, bytecode_hash_domsep)
-            reduce_bytecode_claims(bytecode_claims, 2, bytecode_claim_output)
-            slice_hash_with_iv(data_buf, TYPE_1_INPUT_DATA_NUM_CHUNKS, pub_mem)
+            bytecode_claims[1] = recursion(inner_pub_mem, initial_fiat_shamir_cap)
+            reduce_bytecode_claims(bytecode_claims, 2, bytecode_claim_output, initial_fiat_shamir_cap)
+            slice_hash(data_buf, TYPE_1_INPUT_DATA_NUM_CHUNKS, pub_mem)
             return
 
     # General path
-    computed_pubkeys_hash = slice_hash_with_iv_dynamic_unroll(all_pubkeys, n_sigs, log2_ceil(MAX_N_SIGS))
+    computed_pubkeys_hash = slice_hash_runtime(all_pubkeys, n_sigs)
     copy_8(computed_pubkeys_hash, pubkeys_hash_expected)
 
     # Buffer for partition verification
@@ -182,45 +183,44 @@ def main():
     for rec_idx in range(0, n_recursions):
         n_sub = aggregate_sizes[rec_idx]
         assert n_sub != 0
-        assert n_sub < MAX_N_SIGS
+        assert n_sub <= MAX_N_SIGS
         sub_indices_arr = Array(n_sub)
         hint_witness("sub_indices", sub_indices_arr)
 
-        idx0 = sub_indices_arr[0]
-        assert idx0 < n_total
-        buffer[idx0] = counter
-        counter += 1
-        pk0 = all_pubkeys + idx0 * PUB_KEY_SIZE
-        running_hash: Mut = Array(DIGEST_LEN)
-        poseidon16_compress(ZERO_VEC_PTR, pk0, running_hash)
 
-        for j in dynamic_unroll(1, n_sub, log2_ceil(MAX_N_SIGS)):
-            idx = sub_indices_arr[j]
-            assert idx < n_total
-            buffer[idx] = counter
-            counter += 1
-            pk = all_pubkeys + idx * PUB_KEY_SIZE
-            new_hash = Array(DIGEST_LEN)
-            poseidon16_compress(running_hash, pk, new_hash)
-            running_hash = new_hash
+        running_hash: Mut = build_iv(n_sub * PUB_KEY_SIZE)
+        n_chunks, remainder = euclidian_div_runtime(n_sub, PARTIAL_UNROLL_BATCH)
+        j: Mut = 0
+        for _ in range(0, n_chunks):
+            for u in unroll(0, PARTIAL_UNROLL_BATCH):
+                counter, running_hash = absorb_recursive_pubkey(j + u, sub_indices_arr, n_total, all_pubkeys, buffer, counter, running_hash)
+            j += PARTIAL_UNROLL_BATCH
+        # Tail iterations
+        tail_counter, tail_running_hash = match_range(
+            remainder,
+            range(0, PARTIAL_UNROLL_BATCH),
+            lambda r: absorb_n_pubkeys_const(r, j, sub_indices_arr, n_total, all_pubkeys, buffer, counter, running_hash),
+        )
+        counter = tail_counter
+        running_hash = tail_running_hash
 
         type1_data_buf = Array(TYPE_1_INPUT_DATA_SIZE_PADDED)
         type1_data_buf[0] = TYPE_1_FLAG
         type1_data_buf[1] = n_sub
         for k in unroll(2, DIGEST_LEN):
             type1_data_buf[k] = 0
-        
+
         copy_8(running_hash, type1_data_buf + TYPE_1_PUBKEYS_HASH_OFFSET)
         copy_8(message, type1_data_buf + TYPE_1_PUBKEYS_HASH_OFFSET + DIGEST_LEN)
         copy_8(merkle_chunks_for_slot, type1_data_buf + TYPE_1_PUBKEYS_HASH_OFFSET + DIGEST_LEN + MESSAGE_LEN)
         copy_8(tweaks_hash_expected, type1_data_buf + TYPE_1_TWEAKS_HASH_OFFSET)
         hint_witness("inner_bytecode_claim", type1_data_buf + BYTECODE_CLAIM_OFFSET)
-        ensure_well_formed_input_data(type1_data_buf, bytecode_hash_domsep, TYPE_1_FLAG)
+        ensure_well_formed_input_data(type1_data_buf, initial_fiat_shamir_cap, TYPE_1_FLAG)
         inner_pub_mem = Array(INNER_PUB_MEM_SIZE)
-        slice_hash_with_iv(type1_data_buf, TYPE_1_INPUT_DATA_NUM_CHUNKS, inner_pub_mem)
+        slice_hash(type1_data_buf, TYPE_1_INPUT_DATA_NUM_CHUNKS, inner_pub_mem)
 
         bytecode_claims[2 * rec_idx] = type1_data_buf + BYTECODE_CLAIM_OFFSET
-        bytecode_claims[2 * rec_idx + 1] = recursion(inner_pub_mem, bytecode_hash_domsep)
+        bytecode_claims[2 * rec_idx + 1] = recursion(inner_pub_mem, initial_fiat_shamir_cap)
 
     assert counter == n_total
 
@@ -231,26 +231,30 @@ def main():
         for k in unroll(1, DIM):
             bytecode_claim_output[BYTECODE_POINT_N_VARS * DIM + k] = 0
     else:
-        reduce_bytecode_claims(bytecode_claims, n_bytecode_claims, bytecode_claim_output)
+        reduce_bytecode_claims(bytecode_claims, n_bytecode_claims, bytecode_claim_output, initial_fiat_shamir_cap)
 
-    slice_hash_with_iv(data_buf, TYPE_1_INPUT_DATA_NUM_CHUNKS, pub_mem)
+    slice_hash(data_buf, TYPE_1_INPUT_DATA_NUM_CHUNKS, pub_mem)
     return
 
 
-def reduce_bytecode_claims(bytecode_claims, n_bytecode_claims, bytecode_claim_output):
-    bytecode_claims_hash: Mut = ZERO_VEC_PTR
+def reduce_bytecode_claims(bytecode_claims, n_bytecode_claims, bytecode_claim_output, initial_fiat_shamir_cap):
+    bytecode_claims_hash: Mut = build_iv(n_bytecode_claims * DIGEST_LEN)
     for i in range(0, n_bytecode_claims):
         claim_ptr = bytecode_claims[i]
         for k in unroll(BYTECODE_CLAIM_SIZE, BYTECODE_CLAIM_SIZE_PADDED):
             assert claim_ptr[k] == 0
-        claim_hash = slice_hash(claim_ptr, BYTECODE_CLAIM_SIZE_PADDED / DIGEST_LEN)
+        claim_hash = slice_hash_ret(claim_ptr, BYTECODE_CLAIM_SIZE_PADDED / DIGEST_LEN)
         new_hash = Array(DIGEST_LEN)
         poseidon16_compress(bytecode_claims_hash, claim_hash, new_hash)
         bytecode_claims_hash = new_hash
 
     bytecode_sumcheck_proof = Array(BYTECODE_SUMCHECK_PROOF_SIZE)
     hint_witness("bytecode_sumcheck_proof", bytecode_sumcheck_proof)
-    reduction_fs: Mut = fs_new(bytecode_sumcheck_proof)
+    reduction_capacity = Array(DIGEST_LEN)
+    reduction_capacity[0] = initial_fiat_shamir_cap[0] + 1  # Domain-separate this sub-protocol from the main snark
+    for i in unroll(1, DIGEST_LEN):
+        reduction_capacity[i] = initial_fiat_shamir_cap[i]
+    reduction_fs: Mut = fs_new(bytecode_sumcheck_proof, reduction_capacity)
     reduction_fs, received_claims_hash = fs_receive_chunks(reduction_fs, 1)
     copy_8(bytecode_claims_hash, received_claims_hash)
 
@@ -282,11 +286,32 @@ def reduce_bytecode_claims(bytecode_claims, n_bytecode_claims, bytecode_claim_ou
 
 
 @inline
-def ensure_well_formed_input_data(data_buf, bytecode_hash_domsep, flag):
+def ensure_well_formed_input_data(data_buf, initial_fiat_shamir_cap, flag):
     data_buf[0] = flag
     # data_buf[1]: count
     set_to_6_zeros(data_buf + 2)
-    for k in unroll(BYTECODE_CLAIM_OFFSET + BYTECODE_CLAIM_SIZE, BYTECODE_HASH_DOMSEP_OFFSET):
+    for k in unroll(BYTECODE_CLAIM_OFFSET + BYTECODE_CLAIM_SIZE, INITIAL_FIAT_SHAMIR_CAP_OFFSET):
         data_buf[k] = 0
-    copy_8(bytecode_hash_domsep, data_buf + BYTECODE_HASH_DOMSEP_OFFSET)
+    copy_8(initial_fiat_shamir_cap, data_buf + INITIAL_FIAT_SHAMIR_CAP_OFFSET)
     return
+
+
+@inline
+def absorb_recursive_pubkey(j, sub_indices_arr, n_total, all_pubkeys, buffer, counter_in, running_hash_in):
+    idx = sub_indices_arr[j]
+    assert idx < n_total
+    buffer[idx] = counter_in
+    new_counter = counter_in + 1
+    pk = all_pubkeys + idx * PUB_KEY_SIZE
+    new_hash = Array(DIGEST_LEN)
+    poseidon16_compress(running_hash_in, pk, new_hash)
+    return new_counter, new_hash
+
+
+def absorb_n_pubkeys_const(n: Const, j_start, sub_indices_arr, n_total, all_pubkeys, buffer, counter_in, running_hash_in):
+    counter: Mut = counter_in
+    running_hash: Mut = running_hash_in
+    for u in unroll(0, n):
+        counter, running_hash = absorb_recursive_pubkey(j_start + u, sub_indices_arr, n_total, all_pubkeys, buffer, counter, running_hash)
+    return counter, running_hash
+

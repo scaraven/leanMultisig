@@ -1,16 +1,19 @@
 //! VM execution runner
 
-use crate::core::{DIMENSION, F};
+use crate::core::{DIMENSION, F, PUBLIC_INPUT_LEN};
 use crate::diagnostics::{ExecutionMetadata, ExecutionResult, RunnerError};
 use crate::execution::memory::MemoryAccess;
 use crate::execution::{ExecutionHistory, Memory};
 use crate::isa::Bytecode;
 use crate::isa::hint::{DiagnosticState, Hint, HintState, NamedHintCursor};
 use crate::isa::instruction::{InstructionContext, InstructionCounts};
-use crate::{ALL_TABLES, CodeAddress, HintExecutionContext, MemOrConstant, N_TABLES, STARTING_PC, Table, TableTrace};
+use crate::{
+    ALL_TABLES, CodeAddress, HintExecutionContext, MAX_LOG_MEMORY_SIZE, MemOrConstant, N_TABLES, STARTING_PC, Table,
+    TableTrace,
+};
 use backend::*;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use utils::{ToUsize, padd_with_zero_to_next_power_of_two};
+use utils::ToUsize;
 
 use super::memory::SegmentMemory;
 
@@ -21,11 +24,13 @@ pub struct ExecutionWitness {
     /// manually by the program at startup.
     pub preamble_memory_len: usize,
     pub hints: HashMap<String, Vec<Vec<F>>>,
+    /// testing purpose
+    pub min_table_log_n_rows: BTreeMap<Table, usize>,
 }
 
 pub fn try_execute_bytecode(
     bytecode: &Bytecode,
-    public_input: &[F],
+    public_input: &[F; PUBLIC_INPUT_LEN],
     witness: &ExecutionWitness,
     profiling: bool,
 ) -> Result<ExecutionResult, RunnerError> {
@@ -56,7 +61,7 @@ pub fn try_execute_bytecode(
 
 pub fn execute_bytecode(
     bytecode: &Bytecode,
-    public_input: &[F],
+    public_input: &[F; PUBLIC_INPUT_LEN],
     witness: &ExecutionWitness,
     profiling: bool,
 ) -> ExecutionResult {
@@ -203,8 +208,7 @@ fn run_loop<M: MemoryAccess>(
 /// Each constraint has form: memory[target_addr] = memory[memory[src_addr]]
 /// Order matters because some src addresses might point to targets of other hints.
 /// We iteratively resolve constraints until no more progress, then fill remaining with 0.
-/// Assumption: every memory[src_addr] is defined (i.e. is Some(_)) (which is true when DEREFs come from range checks)
-fn resolve_deref_hints(memory: &mut Memory, pending: &[(usize, usize)]) {
+fn resolve_deref_hints(memory: &mut Memory, pending: &[(usize, usize)]) -> Result<(), RunnerError> {
     let mut resolved: BTreeSet<usize> = BTreeSet::new();
     loop {
         let mut made_progress = false;
@@ -212,11 +216,13 @@ fn resolve_deref_hints(memory: &mut Memory, pending: &[(usize, usize)]) {
             if resolved.contains(&target_addr) {
                 continue;
             }
-            let addr = memory.0[src_addr].unwrap();
+            let addr = memory
+                .get(src_addr)
+                .map_err(|_| RunnerError::ImpossibleDerefResolution)?;
             let Some(value) = memory.0.get(addr.to_usize()).copied().flatten() else {
                 continue;
             };
-            memory.set(target_addr, value).unwrap();
+            memory.set(target_addr, value)?;
             resolved.insert(target_addr);
             made_progress = true;
         }
@@ -227,15 +233,16 @@ fn resolve_deref_hints(memory: &mut Memory, pending: &[(usize, usize)]) {
     // Fill any remaining unresolved targets with 0 (this can happen in case of cycles)
     for &(target_addr, _src_addr) in pending {
         if !resolved.contains(&target_addr) {
-            memory.set(target_addr, F::ZERO).unwrap();
+            memory.set(target_addr, F::ZERO)?;
         }
     }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
 fn execute_bytecode_helper(
     bytecode: &Bytecode,
-    public_input: &[F],
+    public_input: &[F; PUBLIC_INPUT_LEN],
     witness: &ExecutionWitness,
     std_out: &mut String,
     instruction_history: &mut ExecutionHistory,
@@ -246,10 +253,9 @@ fn execute_bytecode_helper(
         .iter()
         .map(|(name, entries)| (name.clone(), NamedHintCursor::new(entries)))
         .collect();
-    let public_memory = padd_with_zero_to_next_power_of_two(public_input);
-    let public_memory_size = public_memory.len();
+    let public_memory = public_input.to_vec();
     let mut memory = Memory::new(public_memory);
-    let mut fp = public_memory_size + witness.preamble_memory_len;
+    let mut fp = PUBLIC_INPUT_LEN + witness.preamble_memory_len;
     fp = fp.next_multiple_of(DIMENSION);
     let initial_ap = fp + bytecode.starting_frame_memory;
     let mut pc = STARTING_PC;
@@ -300,16 +306,19 @@ fn execute_bytecode_helper(
         }
     }
 
-    resolve_deref_hints(&mut memory, &trace.pending_deref_hints);
+    resolve_deref_hints(&mut memory, &trace.pending_deref_hints).map_err(|e| (pc, e))?;
     assert_eq!(pc, bytecode.ending_pc);
     for (name, cursor) in &named_hints {
-        assert_eq!(
-            cursor.index,
-            cursor.entries.len(),
-            "Not all entries of named hint '{name}' were consumed ({} of {} used)",
-            cursor.index,
-            cursor.entries.len(),
-        );
+        if cursor.index != cursor.entries.len() {
+            return Err((
+                pc,
+                RunnerError::InvalidHintWitness(format!(
+                    "not all entries of named hint '{name}' were consumed ({} of {} used)",
+                    cursor.index,
+                    cursor.entries.len(),
+                )),
+            ));
+        }
     }
     trace.pcs.push(pc);
     trace.fps.push(fp);
@@ -323,7 +332,7 @@ fn execute_bytecode_helper(
     } else {
         None
     };
-    let runtime_memory_size = memory.0.len() - public_memory_size - witness.preamble_memory_len;
+    let runtime_memory_size = memory.0.len() - PUBLIC_INPUT_LEN - witness.preamble_memory_len;
     let used_memory_cells = memory.0.par_iter().filter(|&&x| x.is_some()).count();
     let metadata = ExecutionMetadata {
         cycles: trace.pcs.len(),
@@ -331,7 +340,7 @@ fn execute_bytecode_helper(
         n_poseidons: trace.tables[&Table::poseidon16()].columns[0].len(),
         n_extension_ops: trace.tables[&Table::extension_op()].columns[0].len(),
         bytecode_size: bytecode.code.len(),
-        public_input_size: public_input.len(),
+        public_input_size: PUBLIC_INPUT_LEN,
         runtime_memory: runtime_memory_size,
         memory_usage_percent: used_memory_cells as f64 / memory.0.len() as f64 * 100.0,
         stdout: std::mem::take(std_out),
@@ -339,7 +348,6 @@ fn execute_bytecode_helper(
     };
     Ok(ExecutionResult {
         runtime_memory_size: no_vec_runtime_memory,
-        public_memory_size,
         memory,
         pcs: trace.pcs,
         fps: trace.fps,
@@ -378,9 +386,8 @@ fn handle_parallel_batch(
 ) -> Result<(), RunnerError> {
     let start_value = memory.get(batch.batch_fp + 2)?.to_usize();
     let end_value = batch.end_value.read_value(memory, batch.batch_fp)?.to_usize();
-    let n_iters = end_value - start_value;
-
-    if n_iters == 1 {
+    let n_iters = end_value.saturating_sub(start_value);
+    if n_iters <= 1 {
         return Ok(());
     }
 
@@ -410,6 +417,9 @@ fn handle_parallel_batch(
     }
 
     let max_addr = batch.batch_fp + (n_iters + 1) * stride;
+    if max_addr > 1 << MAX_LOG_MEMORY_SIZE {
+        return Err(RunnerError::OutOfMemory);
+    }
     if max_addr > memory.0.len() {
         memory.0.resize(max_addr, None);
     }
@@ -442,6 +452,8 @@ fn handle_parallel_batch(
                     cursor.index += i * delta;
                 }
             }
+            let seg_start_indices: HashMap<_, _> =
+                seg_named_hints.iter().map(|(name, c)| (name.clone(), c.index)).collect();
             let mut hints = HintState {
                 diagnostics: None,
                 named_hints: &mut seg_named_hints,
@@ -456,6 +468,14 @@ fn handle_parallel_batch(
                 &mut hints,
                 Some(batch.batch_pc),
             )?;
+            for (name, delta) in &named_per_iter {
+                let consumed = seg_named_hints[name].index - seg_start_indices[name];
+                if consumed != *delta {
+                    return Err(RunnerError::InvalidHintWitness(format!(
+                        "hint '{name}' consumed {consumed} entries in a parallel iteration but {delta} in iteration 0; parallel iterations must consume hints uniformly"
+                    )));
+                }
+            }
             let deferred = seg_mem.into_deferred_writes();
             Ok((seg_trace, deferred))
         })

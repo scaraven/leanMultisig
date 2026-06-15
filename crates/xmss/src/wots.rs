@@ -48,9 +48,9 @@ impl WotsSecretKey {
         slot: u32,
         xmss_pub_key: &XmssPublicKey,
         randomness: Randomness,
-    ) -> WotsSignature {
-        let encoding = wots_encode(message, slot, xmss_pub_key, &randomness).unwrap();
-        self.sign_with_encoding(randomness, &encoding, xmss_pub_key.public_param, slot)
+    ) -> Option<WotsSignature> {
+        let encoding = wots_encode(message, slot, xmss_pub_key, &randomness)?;
+        Some(self.sign_with_encoding(randomness, &encoding, xmss_pub_key.public_param, slot))
     }
 
     fn sign_with_encoding(
@@ -75,9 +75,8 @@ impl WotsSignature {
         message: &[F; MESSAGE_LEN_FE],
         slot: u32,
         xmss_pub_key: &XmssPublicKey,
-        signature: &Self,
     ) -> Option<WotsPublicKey> {
-        let encoding = wots_encode(message, slot, xmss_pub_key, &signature.randomness)?;
+        let encoding = wots_encode(message, slot, xmss_pub_key, &self.randomness)?;
         Some(WotsPublicKey(std::array::from_fn(|i| {
             iterate_hash(
                 &self.chain_tips[i],
@@ -165,11 +164,11 @@ pub fn wots_encode(
     second_input_right[..PUBLIC_PARAM_LEN_FE].copy_from_slice(&xmss_pub_key.public_param);
     let compressed = poseidon16_compress_pair(&pre_compressed, &second_input_right);
 
-    if compressed.iter().any(|&kb| kb == -F::ONE) {
+    if compressed[..NUM_ENCODING_FE].iter().any(|&kb| kb == -F::ONE) {
         // ensures uniformity of encoding
         return None;
     }
-    let all_indices: Vec<_> = compressed
+    let all_indices: Vec<_> = compressed[..NUM_ENCODING_FE]
         .iter()
         .flat_map(|kb| to_little_endian_bits(kb.to_usize(), 24))
         .collect::<Vec<_>>()

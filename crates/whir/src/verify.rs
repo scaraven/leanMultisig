@@ -2,7 +2,7 @@
 
 use std::{fmt::Debug, marker::PhantomData};
 
-use fiat_shamir::{FSVerifier, ProofError, ProofResult, pack_scalars_to_extension};
+use fiat_shamir::{FSVerifier, ProofError, ProofResult, try_pack_scalars_to_extension};
 use field::{ExtensionField, Field, PrimeCharacteristicRing, TwoAdicField};
 use poly::*;
 
@@ -301,13 +301,16 @@ where
         F: Field + ExtensionField<PF<EF>>,
         EF: ExtensionField<F>,
     {
+        verifier_state.begin_merkle_opening_batch(indices.len())?;
         let res = if leafs_base_field {
             let mut answers = Vec::<Vec<F>>::new();
             let mut merkle_proofs = Vec::new();
 
             for _ in 0..indices.len() {
                 let opening = verifier_state.next_merkle_opening()?;
-                answers.push(pack_scalars_to_extension::<PF<EF>, F>(&opening.leaf_data));
+                answers.push(
+                    try_pack_scalars_to_extension::<PF<EF>, F>(&opening.leaf_data).ok_or(ProofError::InvalidProof)?,
+                );
                 merkle_proofs.push(opening.path);
             }
 
@@ -327,7 +330,9 @@ where
 
             for _ in 0..indices.len() {
                 let opening = verifier_state.next_merkle_opening()?;
-                answers.push(pack_scalars_to_extension::<PF<EF>, EF>(&opening.leaf_data));
+                answers.push(
+                    try_pack_scalars_to_extension::<PF<EF>, EF>(&opening.leaf_data).ok_or(ProofError::InvalidProof)?,
+                );
                 merkle_proofs.push(opening.path);
             }
 

@@ -64,7 +64,7 @@ pub fn prove_gkr_quotient<'a, EF: ExtensionField<PF<EF>>>(
     let (top_nums, top_dens) = layers.pop().unwrap().materialise_in_full();
     prover_state.add_extension_scalars(&top_nums);
     prover_state.add_extension_scalars(&top_dens);
-    let quotient = compute_quotient(&top_nums, &top_dens);
+    let quotient = compute_quotient(&top_nums, &top_dens).expect("prover produced a zero denominator"); // completeness error, happens with proba arround 1/2^128
 
     let mut point = MultilinearPoint(prover_state.sample_vec(N_VARS_TO_SEND_GKR_COEFFS));
     let mut claim_num = top_nums.evaluate(&point);
@@ -140,8 +140,12 @@ fn prove_gkr_layer<EF: ExtensionField<PF<EF>>>(
     (MultilinearPoint(q_natural), next_num, next_den)
 }
 
-fn compute_quotient<EF: ExtensionField<PF<EF>>>(numerators: &[EF], denominators: &[EF]) -> EF {
-    numerators.iter().zip(denominators).map(|(&n, &d)| n / d).sum()
+fn compute_quotient<EF: ExtensionField<PF<EF>>>(numerators: &[EF], denominators: &[EF]) -> Option<EF> {
+    let mut acc = EF::ZERO;
+    for (&n, &d) in numerators.iter().zip(denominators) {
+        acc += n * d.try_inverse()?;
+    }
+    Some(acc)
 }
 
 pub fn verify_gkr_quotient<EF: ExtensionField<PF<EF>>>(
@@ -152,7 +156,7 @@ pub fn verify_gkr_quotient<EF: ExtensionField<PF<EF>>>(
     let send_len = 1 << N_VARS_TO_SEND_GKR_COEFFS;
     let last_nums = verifier_state.next_extension_scalars_vec(send_len)?;
     let last_dens = verifier_state.next_extension_scalars_vec(send_len)?;
-    let quotient: EF = compute_quotient(&last_nums, &last_dens);
+    let quotient: EF = compute_quotient(&last_nums, &last_dens).ok_or(ProofError::InvalidProof)?;
     let mut point = MultilinearPoint(verifier_state.sample_vec(N_VARS_TO_SEND_GKR_COEFFS));
     let mut claims_num = last_nums.evaluate(&point);
     let mut claims_den = last_dens.evaluate(&point);
@@ -197,7 +201,7 @@ mod tests {
 
     use super::*;
     use rand::{RngExt, SeedableRng, rngs::StdRng};
-    use utils::{build_prover_state, build_verifier_state, init_tracing};
+    use utils::{get_poseidon16, init_tracing};
 
     type F = KoalaBear;
     type EF = QuinticExtensionFieldKB;
@@ -244,7 +248,7 @@ mod tests {
         denominators_raw.extend(std::iter::repeat_n(EF::ONE, n - active_len));
 
         let real_quotient = sum_all_quotients(&numerators_raw, &denominators_raw);
-        let mut prover_state = build_prover_state();
+        let mut prover_state = ProverState::new(get_poseidon16().clone(), Default::default());
 
         // Keep natural-layout MLEs to check claims at `claim_point`.
         let numerators_nat = MleOwned::BasePacked(pack_extension(&numerators_raw));
@@ -268,7 +272,9 @@ mod tests {
         );
         println!("Proving time: {:.3}s", time.elapsed().as_secs_f64());
 
-        let mut verifier_state = build_verifier_state(prover_state).unwrap();
+        let mut verifier_state =
+            VerifierState::<EF, _>::new(prover_state.into_proof(), get_poseidon16().clone(), Default::default())
+                .unwrap();
         let verifier_statements = verify_gkr_quotient::<EF>(&mut verifier_state, log_n).unwrap();
         let (retrieved_quotient, claim_point, claim_num, claim_den) = verifier_statements;
         assert_eq!(claim_point_prover, claim_point);

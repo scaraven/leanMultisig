@@ -49,8 +49,9 @@ fn test_fold_roots_sphincs() {
         let witness = ExecutionWitness {
             preamble_memory_len: PREAMBLE_MEMORY_LEN,
             hints,
+            ..Default::default()
         };
-        execute_bytecode(&bytecode, &vec![F::from_usize(0); DIGEST_LEN], &witness, false);
+        execute_bytecode(&bytecode, &[F::from_usize(0); DIGEST_LEN], &witness, false);
     });
 }
 
@@ -133,8 +134,9 @@ fn test_sphincs_wots_encode_complete() {
             let witness = ExecutionWitness {
                 preamble_memory_len: PREAMBLE_MEMORY_LEN,
                 hints,
+                ..Default::default()
             };
-            execute_bytecode(&bytecode, &vec![F::from_usize(0); DIGEST_LEN], &witness, false);
+            execute_bytecode(&bytecode, &[F::from_usize(0); DIGEST_LEN], &witness, false);
         }
 
         // ---- Case 2: Wrong expected pubkey ----
@@ -168,9 +170,10 @@ fn test_sphincs_wots_encode_complete() {
             let witness = ExecutionWitness {
                 preamble_memory_len: PREAMBLE_MEMORY_LEN,
                 hints,
+                ..Default::default()
             };
             assert!(
-                try_execute_bytecode(&bytecode, &vec![F::from_usize(0); DIGEST_LEN], &witness, false).is_err(),
+                try_execute_bytecode(&bytecode, &[F::from_usize(0); DIGEST_LEN], &witness, false).is_err(),
                 "should fail: wrong expected pubkey"
             );
         }
@@ -205,9 +208,10 @@ fn test_sphincs_wots_encode_complete() {
             let witness = ExecutionWitness {
                 preamble_memory_len: PREAMBLE_MEMORY_LEN,
                 hints,
+                ..Default::default()
             };
             assert!(
-                try_execute_bytecode(&bytecode, &vec![F::from_usize(0); DIGEST_LEN], &witness, false).is_err(),
+                try_execute_bytecode(&bytecode, &[F::from_usize(0); DIGEST_LEN], &witness, false).is_err(),
                 "should fail: invalid encoding (sum != TARGET_SUM or -1 FE)"
             );
         }
@@ -258,9 +262,10 @@ fn test_sphincs_wots_encode_complete() {
             let witness = ExecutionWitness {
                 preamble_memory_len: PREAMBLE_MEMORY_LEN,
                 hints,
+                ..Default::default()
             };
             assert!(
-                try_execute_bytecode(&bytecode, &vec![F::from_usize(0); DIGEST_LEN], &witness, false).is_err(),
+                try_execute_bytecode(&bytecode, &[F::from_usize(0); DIGEST_LEN], &witness, false).is_err(),
                 "should fail: chain tips shifted one position too far"
             );
         }
@@ -297,8 +302,9 @@ fn test_sphincs_fors_merkle_verify() {
         let witness = ExecutionWitness {
             preamble_memory_len: PREAMBLE_MEMORY_LEN,
             hints,
+            ..Default::default()
         };
-        execute_bytecode(&bytecode, &vec![F::from_usize(0); DIGEST_LEN], &witness, false);
+        execute_bytecode(&bytecode, &[F::from_usize(0); DIGEST_LEN], &witness, false);
     });
 }
 
@@ -331,9 +337,10 @@ fn test_sphincs_fors_verify() {
         let witness = ExecutionWitness {
             preamble_memory_len: PREAMBLE_MEMORY_LEN,
             hints,
+            ..Default::default()
         };
 
-        execute_bytecode(&bytecode, &vec![F::from_usize(0); DIGEST_LEN], &witness, false);
+        execute_bytecode(&bytecode, &[F::from_usize(0); DIGEST_LEN], &witness, false);
 
         // Wrong root: random HalfDigest (4 FEs)
         let root_wrong: HalfDigest = rng.random();
@@ -350,10 +357,11 @@ fn test_sphincs_fors_verify() {
         let witness_wrong = ExecutionWitness {
             preamble_memory_len: PREAMBLE_MEMORY_LEN,
             hints: hints_wrong,
+            ..Default::default()
         };
 
         assert!(
-            try_execute_bytecode(&bytecode, &vec![F::from_usize(0); DIGEST_LEN], &witness_wrong, false).is_err(),
+            try_execute_bytecode(&bytecode, &[F::from_usize(0); DIGEST_LEN], &witness_wrong, false).is_err(),
             "should fail: wrong expected root"
         );
     });
@@ -409,8 +417,9 @@ fn test_sphincs_hypertree_merkle_verify() {
         let witness = ExecutionWitness {
             preamble_memory_len: PREAMBLE_MEMORY_LEN,
             hints,
+            ..Default::default()
         };
-        let profiling_result = execute_bytecode(&bytecode, &vec![F::from_usize(0); DIGEST_LEN], &witness, true);
+        let profiling_result = execute_bytecode(&bytecode, &[F::from_usize(0); DIGEST_LEN], &witness, true);
         println!("{}", profiling_result.metadata.profiling_report.unwrap());
     });
 }
@@ -468,8 +477,9 @@ fn test_sphincs_hypertree_verify() {
             let witness = ExecutionWitness {
                 preamble_memory_len: PREAMBLE_MEMORY_LEN,
                 hints,
+                ..Default::default()
             };
-            execute_bytecode(&bytecode, &vec![F::from_usize(0); DIGEST_LEN], &witness, false);
+            execute_bytecode(&bytecode, &[F::from_usize(0); DIGEST_LEN], &witness, false);
         })
         .unwrap()
         .join()
@@ -519,9 +529,10 @@ fn test_decompose_message_digest() {
             let witness = ExecutionWitness {
                 preamble_memory_len: PREAMBLE_MEMORY_LEN,
                 hints,
+                ..Default::default()
             };
 
-            execute_bytecode(&bytecode, &vec![F::from_usize(0); DIGEST_LEN], &witness, false);
+            execute_bytecode(&bytecode, &[F::from_usize(0); DIGEST_LEN], &witness, false);
         }
     });
 }

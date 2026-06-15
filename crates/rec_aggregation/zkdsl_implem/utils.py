@@ -42,7 +42,7 @@ def powers(alpha, n):
     assert n < 400
     assert 0 < n
     # 2**log2_ceil(i) is not really necessary but helps reduce byetcode size (traedoff cycles / bytecode size)
-    res = match_range(n, range(1, 400), lambda i: powers_const(alpha, 2**log2_ceil(i)))
+    res = match_range(n, range(1, 400), lambda i: powers_const(alpha, 2 ** log2_ceil(i)))
     return res
 
 
@@ -73,6 +73,7 @@ def product_first_n(values, n):
     debug_assert(n < 33)
     res = match_range(n, range(0, 1), lambda _: ONE_EF_PTR, range(1, 33), lambda i: product_first_n_const(values, i))
     return res
+
 
 @inline
 def product_first_n_const(values, n):
@@ -128,6 +129,20 @@ def poly_eq_base_extension_to(a, b, dst, n):
 def poly_eq_base_extension(a, b, n):
     res = Array(DIM)
     poly_eq_base_extension_to(a, b, res, n)
+    return res
+
+
+def poly_eq_base_extension_or_one(a, b, n):
+    # Like poly_eq_base_extension, but returns the identity (the extension element 1)
+    # when n == 0, i.e. the empty product, instead of failing the match_range dispatch.
+    debug_assert(n < 33)
+    res = match_range(
+        n,
+        range(0, 1),
+        lambda _: ONE_EF_PTR,
+        range(1, 33),
+        lambda i: poly_eq_base_extension(a, b, i),
+    )
     return res
 
 
@@ -198,10 +213,12 @@ def dot_product_be_dynamic(a, b, res, n):
     match_range(n, range(1, 400), lambda i: dot_product_be(a, b, res, i))
     return
 
+
 def dot_product_ee_dynamic(a, b, res, n):
     debug_assert(n < 400)
     match_range(n, range(1, 400), lambda i: dot_product_ee(a, b, res, i))
     return
+
 
 def mle_of_01234567_etc(point, n):
     if n == 0:
@@ -219,7 +236,7 @@ def mle_of_01234567_etc(point, n):
 
 @inline
 def checked_less_than(a, b):
-    res: Imu
+    res: Imm
     hint_less_than(a, b, res)
     assert res * (1 - res) == 0
     if res == 1:
@@ -232,7 +249,7 @@ def checked_less_than(a, b):
 @inline
 def maximum(a, b):
     is_a_less_than_b = checked_less_than(a, b)
-    res: Imu
+    res: Imm
     if is_a_less_than_b == 1:
         res = b
     else:
@@ -310,6 +327,7 @@ def div_extension_ret(n, d):
     div_extension(n, d, quotient)
     return quotient
 
+
 @inline
 def div_extension(n, d, res):
     dot_product_ee(d, res, n)
@@ -375,6 +393,7 @@ def set_to_5_zeros(a):
     dot_product_ee(a, ONE_EF_PTR, zero_ptr)
     return
 
+
 @inline
 def set_to_6_zeros(a):
     zero_ptr = ZERO_VEC_PTR
@@ -397,6 +416,7 @@ def set_to_8_zeros(a):
     dot_product_ee(a, ONE_EF_PTR, zero_ptr)
     dot_product_ee(a + (8 - DIM), ONE_EF_PTR, zero_ptr)
     return
+
 
 @inline
 def copy_4(a, b):
@@ -427,6 +447,7 @@ def set_to_16_zeros(a):
     a[15] = 0
     return
 
+
 @inline
 def copy_16(a, b):
     dot_product_ee(a, ONE_EF_PTR, b)
@@ -434,6 +455,7 @@ def copy_16(a, b):
     dot_product_ee(a + 10, ONE_EF_PTR, b + 10)
     a[15] = b[15]
     return
+
 
 @inline
 def copy_8(a, b):
@@ -557,7 +579,7 @@ def whir_1_merkle_step_and_pow(v, state_in, path_chunk, state_out, power_shift):
 
 
 @inline
-def decompose_and_verify_merkle_query(a, domain_size, prev_root, num_chunks):
+def decompose_and_verify_merkle_query(a, domain_size, prev_root, num_chunks, leaf_iv):
     nibbles = Array(6)
     hint_decompose_bits_merkle_whir(nibbles, a, 4)
 
@@ -578,7 +600,7 @@ def decompose_and_verify_merkle_query(a, domain_size, prev_root, num_chunks):
 
     leaf_data = Array(num_chunks * DIGEST_LEN)
     hint_witness("merkle_leaf", leaf_data)
-    leaf_hash = slice_hash_rtl(leaf_data, num_chunks)
+    leaf_hash = slice_hash_rtl(leaf_data, num_chunks, leaf_iv)
 
     merkle_path = Array(domain_size * DIGEST_LEN)
     hint_witness("merkle_path", merkle_path)
@@ -739,11 +761,13 @@ def embed_in_ef(f):
         res[i] = 0
     return res
 
+
 def next_mle(x, y, n):
     debug_assert(n < 32)
     debug_assert(n != 0)
     res = match_range(n, range(1, 32), lambda i: next_mle_const(x, y, i))
     return res
+
 
 def next_mle_const(x, y, n: Const):
     # x and y are pointers to n elements of extension field
@@ -805,10 +829,17 @@ def _verify_log2_large(n, log2: Const):
 
 def log2_ceil_runtime(n):
     # requires: 2 < n <= 2^30
-    log2: Imu
+    log2: Imm
     hint_log2_ceil(n, log2)
     assert log2 < 31
     if two_exp(log2) != n:
         _, partial_sums_24 = checked_decompose_bits(n)
-        match_range(log2, range(2, 24), lambda i: _verify_log2_small(n, partial_sums_24, i), range(24, 31), lambda i: _verify_log2_large(n, i))
+        match_range(
+            log2,
+            range(2, 24),
+            lambda i: _verify_log2_small(n, partial_sums_24, i),
+            range(24, 31),
+            lambda i: _verify_log2_large(n, i),
+        )
     return log2
+
