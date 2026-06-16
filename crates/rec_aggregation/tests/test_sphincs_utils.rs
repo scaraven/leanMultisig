@@ -427,10 +427,7 @@ fn test_sphincs_hypertree_merkle_verify() {
             ),
             ("leaf_node".to_string(), vec![leaf_node.to_vec()]),
             // One queue entry per sibling (one hint_witness call per Merkle level), bottom-up.
-            (
-                "ht_auth".to_string(),
-                auth_path.iter().map(|n| n.to_vec()).collect(),
-            ),
+            ("ht_auth".to_string(), auth_path.iter().map(|n| n.to_vec()).collect()),
             ("expected_root".to_string(), vec![root.to_vec()]),
         ]);
         let witness = ExecutionWitness {

@@ -10,7 +10,7 @@ use std::sync::OnceLock;
 use sub_protocols::{N_VARS_TO_SEND_GKR_COEFFS, min_stacked_n_vars, total_whir_statements};
 use tracing::instrument;
 use utils::Counter;
-use xmss::{LOG_LIFETIME, MESSAGE_LEN_FE, V, XMSS_DIGEST_LEN, W, TARGET_SUM, RANDOMNESS_LEN_FE, PUBLIC_PARAM_LEN_FE};
+use xmss::{LOG_LIFETIME, MESSAGE_LEN_FE, PUBLIC_PARAM_LEN_FE, RANDOMNESS_LEN_FE, TARGET_SUM, V, W, XMSS_DIGEST_LEN};
 
 use crate::type_1_aggregation::TWEAK_TABLE_SIZE_FE_PADDED;
 

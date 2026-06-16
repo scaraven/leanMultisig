@@ -5,8 +5,7 @@ use rand::{RngExt, SeedableRng, rngs::StdRng};
 use rec_aggregation::{PREAMBLE_MEMORY_LEN, compilation::build_replacements, sphincs::split_leaf_upper};
 use sphincs::{
     DIGEST_SIZE, HALF_DIGEST_SIZE, HalfDigest, HypertreeSecretKey, HypertreeSignature, MESSAGE_LEN_FE,
-    MSG_RANDOMNESS_LEN_FE,
-    RANDOMNESS_LEN_FE, SPX_D, SPX_TREE_BITS, SPX_TREE_HEIGHT, SPX_WOTS_LEN,
+    MSG_RANDOMNESS_LEN_FE, RANDOMNESS_LEN_FE, SPX_D, SPX_TREE_BITS, SPX_TREE_HEIGHT, SPX_WOTS_LEN,
     address::Adrs,
     core::{SphincsSecretKey, extract_digest_parts, hmsg},
     fors_auth_buffers, fors_leaf_secrets_to_flat, hypertree_sign,
