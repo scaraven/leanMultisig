@@ -94,18 +94,19 @@ def wots_encode_and_complete(message, adrs0, adrs1, randomness, chain_tips, pk_s
 
     # Step 3: complete each chain individually with WOTS_HASH tweak.
     # adrs1 passed as kp_adrs1 — contains only kp_addr (chain=0, hash=0).
-    # chain_tips are revealed at full 8-FE width (DIGEST_LEN stride); each chain end is the
-    # truncated 4-FE value fed to the WOTS pubkey fold.
-    chain_ends = Array(SPX_WOTS_LEN * HALF_DIGEST_LEN)
+    # chain_tips are revealed at full 8-FE width (DIGEST_LEN stride). Each completed chain end
+    # (a truncated 4-FE value) is written DIRECTLY into its interleaved fold-buffer tip-slot, so
+    # the WOTS pubkey fold needs no per-step right-half copy (see fold_wots_pubkey).
+    fold_buf = Array(fold_buf_len(SPX_WOTS_LEN))
     for i in unroll(0, SPX_WOTS_LEN):
         iterate_hash_single(chain_tips + i * DIGEST_LEN, encoding[i],
-                            pk_seed, adrs0, adrs1, i, chain_ends + i * HALF_DIGEST_LEN)
+                            pk_seed, adrs0, adrs1, i, tip_slot(fold_buf, i))
 
     target_sum: Mut = encoding[0]
     for i in unroll(1, SPX_WOTS_LEN):
         target_sum += encoding[i]
     assert target_sum == TARGET_SUM
 
-    # Step 4: fold 32 chain-end HalfDigests into wots_pubkey with WOTS_PK tweak.
-    fold_wots_pubkey(pk_seed, wots_pk_adrs0, wots_pk_adrs1, chain_ends, wots_pubkey)
+    # Step 4: fold the 32 chain-end HalfDigests (already placed in fold_buf) with WOTS_PK tweak.
+    fold_wots_pubkey(pk_seed, wots_pk_adrs0, wots_pk_adrs1, fold_buf, wots_pubkey)
     return

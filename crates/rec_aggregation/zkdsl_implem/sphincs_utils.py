@@ -90,33 +90,6 @@ def make_tweak5(pk_seed, adrs0):
 
 
 @inline
-def adrs_compress_pair_t5(tweak5, adrs1, right_lo, right_hi, out):
-    # Same as adrs_compress_pair but the left tweak prefix is supplied pre-built as a
-    # 5-FE pointer tweak5 = [pk_seed[0..4] | adrs0]. The left half is staged with a single
-    # copy_5 (1 precompile cycle) instead of copy_4(pk_seed, left) + (left[4] = adrs0).
-    #
-    # left        = [tweak5[0..5] | adrs1, 0, 0]   (== [pk_seed | adrs0 | adrs1 | 0 | 0])
-    # right[0..4] = right_lo[0..4]
-    # right[4..8] = right_hi[0..4]
-    #
-    # tweak5   — pointer to 5 FEs: [pk_seed | adrs0]
-    # adrs1    — scalar
-    # right_lo — pointer to HALF_DIGEST_LEN (4) FEs
-    # right_hi — pointer to HALF_DIGEST_LEN (4) FEs
-    # out      — pointer to HALF_DIGEST_LEN (4) FEs
-    left = Array(DIGEST_LEN)
-    copy_5(tweak5, left)
-    left[5] = adrs1
-    left[6] = 0
-    left[7] = 0
-    right = Array(DIGEST_LEN)
-    copy_4(right_lo, right)
-    copy_4(right_hi, right + HALF_DIGEST_LEN)
-    poseidon16_compress_half(left, right, out)
-    return
-
-
-@inline
 def adrs_compress_pair_t5_block(tweak5, adrs1, right_block, out):
     # Same as adrs_compress_pair_t5 but the 8-FE right half is supplied pre-assembled as a
     # single contiguous pointer, so no right-half copy is performed. Used by the Merkle level
@@ -358,8 +331,40 @@ def do_5_hypertree_merkle_level(k, pk_seed, tree_adrs0, tree_ht_start,
     return
 
 
+# A tweaked left-fold of n tips reads each step's Poseidon right input as the 8-FE block
+# [acc | next_tip]. To avoid copying acc and next_tip into a staging block per step, we lay the
+# tips out in an INTERLEAVED buffer so each block is already contiguous, and write each step's
+# accumulator in place into the slot immediately preceding the next tip.
+#
+# Buffer of (n-1) * DIGEST_LEN FE. Define block i = buf[i*DIGEST_LEN .. i*DIGEST_LEN + DIGEST_LEN]
+# for i = 0..n-2. Layout reads: [tip0, tip1, acc0, tip2, acc1, tip3, ..., acc_{n-3}, tip_{n-1}].
+#   - tip[0] @ buf+0, tip[1] @ buf+HALF_DIGEST_LEN (the two halves of block 0)
+#   - tip[m] (m>=2) @ block (m-1) high half = buf + (m-1)*DIGEST_LEN + HALF_DIGEST_LEN
+#   - acc_i (output of step i) @ block (i+1) low half = buf + (i+1)*DIGEST_LEN
+# Step i reads block i (no copy) and writes acc_i into block i+1's low half (the slot just
+# before tip[i+2]); the last step writes the 4-FE `out`. acc-slots and tip-slots are disjoint,
+# so the write-once model is respected.
+
+
 @inline
-def fold_wots_pubkey(pk_seed, adrs0, adrs1, chain_pub_keys, out):
+def fold_buf_len(n):
+    # Size of the interleaved fold buffer for n tips: (n - 1) * DIGEST_LEN.
+    return n * DIGEST_LEN - DIGEST_LEN
+
+
+@inline
+def tip_slot(buf, m):
+    # Pointer to the slot for tip m within the interleaved buffer (m is compile-time).
+    # m == 0 -> buf; m >= 1 -> buf + (m-1)*DIGEST_LEN + HALF_DIGEST_LEN
+    # (m == 1 gives buf + HALF_DIGEST_LEN, the high half of block 0.)
+    slot: Mut = buf
+    if m != 0:
+        slot = buf + (m - 1) * DIGEST_LEN + HALF_DIGEST_LEN
+    return slot
+
+
+@inline
+def fold_wots_pubkey(pk_seed, adrs0, adrs1, buf, out):
     # Fold SPX_WOTS_LEN (32) completed chain tips into a single WOTS+ public key digest.
     # Matches WotsPublicKey::hash() in wots.rs — tweaked left-fold:
     #   left  = [pk_seed[0..4] | adrs0, adrs1, 0, 0]   (constant across all steps)
@@ -368,27 +373,29 @@ def fold_wots_pubkey(pk_seed, adrs0, adrs1, chain_pub_keys, out):
     # Costs 31 adrs_compress calls.
     #
     # Inputs:
-    #   pk_seed        — pointer to HALF_DIGEST_LEN (4) FEs: per-signer public seed
-    #   adrs0          — scalar: packed layer/type/tree_address (WOTS_PK type)
-    #   adrs1          — scalar: kp_addr (chain=0, hash=0)
-    #   chain_pub_keys — SPX_WOTS_LEN * HALF_DIGEST_LEN FEs: completed chain-end HalfDigests
+    #   pk_seed — pointer to HALF_DIGEST_LEN (4) FEs: per-signer public seed
+    #   adrs0   — scalar: packed layer/type/tree_address (WOTS_PK type)
+    #   adrs1   — scalar: kp_addr (chain=0, hash=0)
+    #   buf     — interleaved fold buffer of fold_buf_len(SPX_WOTS_LEN) FE, with the 32 chain-end
+    #             HalfDigests pre-placed in their tip-slots by the producer (no packed copy)
     # Output:
     #   out — HALF_DIGEST_LEN (4) FEs: folded WOTS+ public key hash
     # adrs0 is constant across all 31 fold steps: build the tweak prefix once.
     tweak5 = make_tweak5(pk_seed, adrs0)
 
-    states = Array((SPX_WOTS_LEN - 2) * HALF_DIGEST_LEN)
+    # Step 0: block 0 = [tip0 | tip1] -> acc0 into block 1's low half.
+    adrs_compress_pair_t5_block(tweak5, adrs1, buf, buf + DIGEST_LEN)
 
-    adrs_compress_pair_t5(tweak5, adrs1, chain_pub_keys, chain_pub_keys + HALF_DIGEST_LEN, states)
-
+    # Steps 1..n-3: block i = [acc_{i-1} | tip_{i+1}] -> acc_i into block i+1's low half.
     for i in unroll(1, SPX_WOTS_LEN - 2):
-        adrs_compress_pair_t5(tweak5, adrs1, states + (i - 1) * HALF_DIGEST_LEN, chain_pub_keys + (i + 1) * HALF_DIGEST_LEN, states + i * HALF_DIGEST_LEN)
+        adrs_compress_pair_t5_block(tweak5, adrs1, buf + i * DIGEST_LEN, buf + (i + 1) * DIGEST_LEN)
 
-    adrs_compress_pair_t5(tweak5, adrs1, states + (SPX_WOTS_LEN - 3) * HALF_DIGEST_LEN, chain_pub_keys + (SPX_WOTS_LEN - 1) * HALF_DIGEST_LEN, out)
+    # Last step: block n-2 -> 4-FE out.
+    adrs_compress_pair_t5_block(tweak5, adrs1, buf + (SPX_WOTS_LEN - 2) * DIGEST_LEN, out)
     return
 
 @inline
-def fold_roots(pk_seed, roots, out):
+def fold_roots(pk_seed, buf, out):
     # Fold SPX_FORS_TREES (9) FORS tree roots into the FORS public key digest.
     # Tweaked left-fold matching fors.rs::fold_roots:
     #   adrs0 = pack(layer=0, type=FORS_ROOTS, tree_addr=0)  — constant across all steps
@@ -398,7 +405,8 @@ def fold_roots(pk_seed, roots, out):
     #
     # Inputs:
     #   pk_seed — pointer to HALF_DIGEST_LEN (4) FEs: per-signer public seed
-    #   roots   — SPX_FORS_TREES * HALF_DIGEST_LEN FEs: one HalfDigest root per FORS tree
+    #   buf     — interleaved fold buffer of fold_buf_len(SPX_FORS_TREES) FE, with the 9 roots
+    #             pre-placed in their tip-slots by the producer (fors_verify; no packed copy)
     # Output:
     #   out     — HALF_DIGEST_LEN (4) FEs: FORS public key hash
     FORS_ROOTS_ADRS0 = ADRS_FORS_ROOTS * (2 ** ADRS0_TYPE_SHIFT)  # layer=0, type=4, tree_addr=0 → 16
@@ -406,12 +414,11 @@ def fold_roots(pk_seed, roots, out):
     # adrs0 (FORS_ROOTS_ADRS0) is constant across all fold steps: build the tweak prefix once.
     tweak5 = make_tweak5(pk_seed, FORS_ROOTS_ADRS0)
 
-    states = Array((SPX_FORS_TREES - 2) * HALF_DIGEST_LEN)
-
-    adrs_compress_pair_t5(tweak5, 0, roots, roots + HALF_DIGEST_LEN, states)
+    # Step 0: block 0 = [root0 | root1], adrs1=0 -> acc0 into block 1's low half.
+    adrs_compress_pair_t5_block(tweak5, 0, buf, buf + DIGEST_LEN)
 
     for i in unroll(1, SPX_FORS_TREES - 2):
-        adrs_compress_pair_t5(tweak5, i, states + (i - 1) * HALF_DIGEST_LEN, roots + (i + 1) * HALF_DIGEST_LEN, states + i * HALF_DIGEST_LEN)
+        adrs_compress_pair_t5_block(tweak5, i, buf + i * DIGEST_LEN, buf + (i + 1) * DIGEST_LEN)
 
-    adrs_compress_pair_t5(tweak5, SPX_FORS_TREES - 2, states + (SPX_FORS_TREES - 3) * HALF_DIGEST_LEN, roots + (SPX_FORS_TREES - 1) * HALF_DIGEST_LEN, out)
+    adrs_compress_pair_t5_block(tweak5, SPX_FORS_TREES - 2, buf + (SPX_FORS_TREES - 2) * DIGEST_LEN, out)
     return

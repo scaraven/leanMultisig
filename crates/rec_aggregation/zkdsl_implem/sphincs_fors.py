@@ -104,10 +104,12 @@ def fors_verify(pk_seed, fors_indices, fors_pk):
     leaf_secrets = Array(SPX_FORS_TREES * HALF_DIGEST_LEN)
     hint_witness("fors_sig", leaf_secrets)
 
-    roots = Array(SPX_FORS_TREES * HALF_DIGEST_LEN)
+    # Each FORS tree root is written DIRECTLY into its interleaved fold-buffer tip-slot, so
+    # fold_roots reads each step's [acc | next_root] block contiguously with no copy.
+    fold_buf = Array(fold_buf_len(SPX_FORS_TREES))
     for t in unroll(0, SPX_FORS_TREES):
         leaf_secret = leaf_secrets + t * HALF_DIGEST_LEN
-        fors_merkle_verify(pk_seed, t, fors_indices[t], leaf_secret, roots + t * HALF_DIGEST_LEN)
+        fors_merkle_verify(pk_seed, t, fors_indices[t], leaf_secret, tip_slot(fold_buf, t))
 
-    fold_roots(pk_seed, roots, fors_pk)
+    fold_roots(pk_seed, fold_buf, fors_pk)
     return
