@@ -94,7 +94,7 @@ def hypertree_verify(pk_seed, fors_pubkey, layer_leaf_indices, expected_pk):
     #
     # Inputs:
     #   hypertree_sig       — HYPERTREE_SIG_SIZE_FE FEs; layout per layer l:
-    #                         [randomness(6) | adrs0(1) | adrs1(1) | chain_tips(128)]
+    #                         [randomness(6) | adrs0(1) | adrs1(1) | chain_tips(256, 8-FE each)]
     #                         (auth paths are no longer in this blob — see ht_auth below)
     #   ht_auth             — auth-path siblings, consumed level-by-level inside
     #                         hypertree_merkle_verify (11 nodes per layer, bottom-up; same order
@@ -118,9 +118,9 @@ def hypertree_verify(pk_seed, fors_pubkey, layer_leaf_indices, expected_pk):
     copy_4(fors_pubkey, msg_0)
     set_to_4_zeros(msg_0 + 4)
 
-    # Per-layer layout: randomness(6) | adrs0(1) | adrs1(1) | chain_tips(128) = 136 FEs.
+    # Per-layer layout: randomness(6) | adrs0(1) | adrs1(1) | chain_tips(256, 8-FE each) = 264 FEs.
     # (Auth-path siblings are streamed via the ht_auth hint queue, not stored here.)
-    layer_stride = RANDOMNESS_LEN + 2 + SPX_WOTS_LEN * HALF_DIGEST_LEN
+    layer_stride = RANDOMNESS_LEN + 2 + SPX_WOTS_LEN * DIGEST_LEN
 
     # --- Layer 0 ---
     randomness_ptr_0 = hypertree_sig

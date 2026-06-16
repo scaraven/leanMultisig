@@ -20,7 +20,7 @@ MSG_RANDOMNESS_LEN_FE = 4    # FEs of per-signature message randomness (prepende
 # Merkle level's Poseidon right-input block. The committed blobs hold only the non-sibling data.
 FORS_SIG_SIZE_FE      = SPX_FORS_TREES * HALF_DIGEST_LEN   # 36: the 9 leaf secrets only
 FORS_AUTH_SIZE_FE     = SPX_FORS_TREES * SPX_FORS_HEIGHT * HALF_DIGEST_LEN   # 540: 15 siblings per tree
-HYPERTREE_SIG_SIZE_FE = SPX_D * (RANDOMNESS_LEN + 2 + SPX_WOTS_LEN * HALF_DIGEST_LEN)  # 408: no auth paths
+HYPERTREE_SIG_SIZE_FE = SPX_D * (RANDOMNESS_LEN + 2 + SPX_WOTS_LEN * DIGEST_LEN)  # 792: no auth paths, 8-FE chain tips
 HYPERTREE_AUTH_SIZE_FE = SPX_D * SPX_TREE_HEIGHT * HALF_DIGEST_LEN   # 132: 11 siblings per layer
 
 # ADRS type codes — must match address.rs constants
@@ -135,6 +135,27 @@ def adrs_compress_pair_t5_block(tweak5, adrs1, right_block, out):
     left[6] = 0
     left[7] = 0
     poseidon16_compress_half(left, right_block, out)
+    return
+
+
+@inline
+def adrs_compress_pair_t5_block_out8(tweak5, adrs1, right_block, out8):
+    # Like adrs_compress_pair_t5_block but writes the FULL 8-FE Poseidon output (constrained),
+    # used by the WOTS hash chain so each step's full output can be fed directly as the next
+    # step's 8-FE right input — no truncation, no zero-write, no copy between steps.
+    #
+    # left = [tweak5[0..5] | adrs1, 0, 0]
+    #
+    # tweak5      — pointer to 5 FEs: [pk_seed | adrs0]
+    # adrs1       — scalar
+    # right_block — pointer to DIGEST_LEN (8) contiguous FEs (the full Poseidon right input)
+    # out8        — pointer to DIGEST_LEN (8) FEs (full constrained Poseidon output)
+    left = Array(DIGEST_LEN)
+    copy_5(tweak5, left)
+    left[5] = adrs1
+    left[6] = 0
+    left[7] = 0
+    poseidon16_compress(left, right_block, out8)
     return
 
 

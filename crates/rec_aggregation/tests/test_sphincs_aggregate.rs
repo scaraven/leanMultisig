@@ -4,7 +4,8 @@ use lean_vm::*;
 use rand::{RngExt, SeedableRng, rngs::StdRng};
 use rec_aggregation::{PREAMBLE_MEMORY_LEN, compilation::build_replacements, sphincs::split_leaf_upper};
 use sphincs::{
-    HALF_DIGEST_SIZE, HalfDigest, HypertreeSecretKey, HypertreeSignature, MESSAGE_LEN_FE, MSG_RANDOMNESS_LEN_FE,
+    DIGEST_SIZE, HALF_DIGEST_SIZE, HalfDigest, HypertreeSecretKey, HypertreeSignature, MESSAGE_LEN_FE,
+    MSG_RANDOMNESS_LEN_FE,
     RANDOMNESS_LEN_FE, SPX_D, SPX_TREE_BITS, SPX_TREE_HEIGHT, SPX_WOTS_LEN,
     address::Adrs,
     core::{SphincsSecretKey, extract_digest_parts, hmsg},
@@ -124,8 +125,8 @@ fn build_sphincs_hints(seed: [u8; 20], message: [F; MESSAGE_LEN_FE]) -> HashMap<
     let ht_auth = sig.hypertree_sig.hypertree_auth_buffers();
 
     // Per layer (no auth paths — those go to ht_auth):
-    //   randomness_with_adrs(RANDOMNESS_LEN_FE+2) + chain_tips(SPX_WOTS_LEN*HALF_DIGEST_SIZE)
-    let expected_hypertree_len = SPX_D * ((RANDOMNESS_LEN_FE + 2) + SPX_WOTS_LEN * HALF_DIGEST_SIZE);
+    //   randomness_with_adrs(RANDOMNESS_LEN_FE+2) + chain_tips(SPX_WOTS_LEN * DIGEST_SIZE, 8-FE each)
+    let expected_hypertree_len = SPX_D * ((RANDOMNESS_LEN_FE + 2) + SPX_WOTS_LEN * DIGEST_SIZE);
     assert_eq!(hypertree_sig_flat.len(), expected_hypertree_len);
 
     // pk hint: [pk_seed(4) | pk_root(4)] — 8 FEs total, matching DIGEST_LEN in the circuit.

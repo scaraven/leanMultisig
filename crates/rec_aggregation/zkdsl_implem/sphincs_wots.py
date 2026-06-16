@@ -4,26 +4,32 @@ from sphincs_utils import *
 
 @inline
 def _iterate_hash_const_tweaked(input, k, pk_seed, adrs0, adrs1_start, output):
-    # Hash a HalfDigest input for k steps with WOTS_HASH tweak, starting at hash_address = adrs1_start.
+    # Run k WOTS_HASH chain steps starting at hash_address = adrs1_start.
     # adrs0, adrs1_start, and k are all compile-time constants at every call site.
     #
-    # Each step j: right = [input[0..4] | 0,0,0,0], then adrs_compress with adrs1 advancing by 2**ADRS1_HASH_SHIFT.
+    # The chain carries FULL 8-FE state between steps (the 8-FE Poseidon output of one step is
+    # fed directly as the next step's right input — no truncation, no zero-write, no copy). This
+    # matches the Rust reference iterate_hash_full_from_full: the revealed mid-chain tip is
+    # 8-FE, and only the chain-final value (the WOTS-pubkey component) is truncated to 4 FE.
     #
-    # input  — pointer to HALF_DIGEST_LEN (4) FEs
-    # output — pointer to HALF_DIGEST_LEN (4) FEs
+    # input  — pointer to DIGEST_LEN (8) FEs: the revealed 8-FE chain tip
+    # output — pointer to HALF_DIGEST_LEN (4) FEs: chain end, truncated (fed to fold_wots_pubkey)
     if k == 0:
+        # Zero remaining steps: the chain end is the tip itself, truncated to its low 4 FE.
         copy_4(input, output)
     elif k == 1:
+        # Single step: full 8-FE input → 4-FE output (out4 truncating compress).
         tweak5 = make_tweak5(pk_seed, adrs0)
-        adrs_compress_pair_t5(tweak5, adrs1_start, input, ZERO_VEC_PTR, output)
+        adrs_compress_pair_t5_block(tweak5, adrs1_start, input, output)
     else:
         # adrs0 is constant across the chain steps: build the tweak prefix once.
+        # First k-1 steps keep full 8-FE state (out8); the last step truncates to 4-FE.
         tweak5 = make_tweak5(pk_seed, adrs0)
-        states = Array((k - 1) * HALF_DIGEST_LEN)
-        adrs_compress_pair_t5(tweak5, adrs1_start, input, ZERO_VEC_PTR, states)
+        states = Array((k - 1) * DIGEST_LEN)
+        adrs_compress_pair_t5_block_out8(tweak5, adrs1_start, input, states)
         for j in unroll(1, k - 1):
-            adrs_compress_pair_t5(tweak5, adrs1_start + j * (2 ** ADRS1_HASH_SHIFT), states + (j - 1) * HALF_DIGEST_LEN, ZERO_VEC_PTR, states + j * HALF_DIGEST_LEN)
-        adrs_compress_pair_t5(tweak5, adrs1_start + (k - 1) * (2 ** ADRS1_HASH_SHIFT), states + (k - 2) * HALF_DIGEST_LEN, ZERO_VEC_PTR, output)
+            adrs_compress_pair_t5_block_out8(tweak5, adrs1_start + j * (2 ** ADRS1_HASH_SHIFT), states + (j - 1) * DIGEST_LEN, states + j * DIGEST_LEN)
+        adrs_compress_pair_t5_block(tweak5, adrs1_start + (k - 1) * (2 ** ADRS1_HASH_SHIFT), states + (k - 2) * DIGEST_LEN, output)
     return
 
 
@@ -58,7 +64,7 @@ def wots_encode_and_complete(message, adrs0, adrs1, randomness, chain_tips, pk_s
     #   adrs0         — scalar: WOTS_HASH adrs0 (layer/type/tree) — compile-time at all call sites
     #   adrs1         — scalar: kp_addr (chain=0, hash=0)         — compile-time at all call sites
     #   randomness    — RANDOMNESS_LEN+2 (8) FEs: [r0..r5, adrs0, adrs1]
-    #   chain_tips    — SPX_WOTS_LEN * HALF_DIGEST_LEN (128) FEs
+    #   chain_tips    — SPX_WOTS_LEN * DIGEST_LEN (256) FEs: revealed 8-FE chain tips
     #   pk_seed       — pointer to HALF_DIGEST_LEN (4) FEs
     #   wots_pk_adrs0 — scalar: WOTS_PK adrs0 — compile-time
     #   wots_pk_adrs1 — scalar: kp_addr (chain=0, hash=0) — compile-time
@@ -88,9 +94,11 @@ def wots_encode_and_complete(message, adrs0, adrs1, randomness, chain_tips, pk_s
 
     # Step 3: complete each chain individually with WOTS_HASH tweak.
     # adrs1 passed as kp_adrs1 — contains only kp_addr (chain=0, hash=0).
+    # chain_tips are revealed at full 8-FE width (DIGEST_LEN stride); each chain end is the
+    # truncated 4-FE value fed to the WOTS pubkey fold.
     chain_ends = Array(SPX_WOTS_LEN * HALF_DIGEST_LEN)
     for i in unroll(0, SPX_WOTS_LEN):
-        iterate_hash_single(chain_tips + i * HALF_DIGEST_LEN, encoding[i],
+        iterate_hash_single(chain_tips + i * DIGEST_LEN, encoding[i],
                             pk_seed, adrs0, adrs1, i, chain_ends + i * HALF_DIGEST_LEN)
 
     target_sum: Mut = encoding[0]

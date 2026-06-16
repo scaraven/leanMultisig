@@ -478,7 +478,7 @@ pub fn init_sphincs_bytecode() {
 }
 
 fn compile_sphincs_program() -> Bytecode {
-    let log_size_guess = 21;
+    let log_size_guess = 20;
     let bytecode_zero_eval = F::ZERO;
 
     let replacements = build_replacements(log_size_guess, bytecode_zero_eval);

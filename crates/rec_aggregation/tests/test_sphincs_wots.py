@@ -36,7 +36,9 @@ def main():
     randomness = Array(RANDOMNESS_LEN + 2)
     hint_witness("randomness", randomness)
 
-    chain_tips = Array(SPX_WOTS_LEN * HALF_DIGEST_LEN)
+    # Revealed chain tips are full 8-FE digests (DIGEST_LEN stride) under the 8-FE-internal
+    # WOTS chain scheme.
+    chain_tips = Array(SPX_WOTS_LEN * DIGEST_LEN)
     hint_witness("chain_tips", chain_tips)
 
     expected_wots_pubkey = Array(HALF_DIGEST_LEN)

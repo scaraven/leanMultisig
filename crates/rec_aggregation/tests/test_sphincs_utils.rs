@@ -4,12 +4,16 @@ use lean_vm::*;
 use rand::{RngExt, SeedableRng, rngs::StdRng};
 use rec_aggregation::{PREAMBLE_MEMORY_LEN, compilation::build_replacements, sphincs::split_leaf_upper};
 use sphincs::{
-    HALF_DIGEST_SIZE, HalfDigest, SPX_D, SPX_FORS_HEIGHT, SPX_FORS_TREES, SPX_TREE_HEIGHT, SPX_WOTS_LEN, SPX_WOTS_W,
+    Digest, HALF_DIGEST_SIZE, HalfDigest, SPX_D, SPX_FORS_HEIGHT, SPX_FORS_TREES, SPX_TREE_HEIGHT, SPX_WOTS_LEN,
+    SPX_WOTS_W,
     address::Adrs,
     core::prf,
     fold_roots, fors_auth_buffers, fors_key_gen, fors_leaf_secrets_to_flat, fors_sign, fors_sign_single_tree,
     hypertree::{HypertreeSecretKey, build_layer_tree, extract_auth_path, hypertree_sign},
-    wots::{WotsPublicKey, WotsSecretKey, find_randomness_for_wots_encoding, iterate_hash_half_from_half, wots_encode},
+    wots::{
+        WotsPublicKey, WotsSecretKey, find_randomness_for_wots_encoding, half_to_full, iterate_hash_full_from_full,
+        truncate_half, wots_encode,
+    },
 };
 use std::collections::HashMap;
 
@@ -63,7 +67,7 @@ fn build_wots_hints(
     adrs: Adrs,
     pk_adrs: Adrs,
     randomness: &[F; sphincs::RANDOMNESS_LEN_FE],
-    chain_tips: &[HalfDigest; SPX_WOTS_LEN],
+    chain_tips: &[Digest; SPX_WOTS_LEN],
     expected_pubkey: &HalfDigest,
 ) -> HashMap<String, Vec<Vec<F>>> {
     let mut randomness_with_adrs = randomness.to_vec();
@@ -106,19 +110,24 @@ fn test_sphincs_wots_encode_complete() {
             let (randomness, encoding, _) =
                 find_randomness_for_wots_encoding(&message, adrs.adrs0, adrs.adrs1, &mut rng);
 
-            // chain_tips[i] = iterate_hash_half_from_half(preimage[i], encoding[i])
-            let chain_tips: [HalfDigest; SPX_WOTS_LEN] = std::array::from_fn(|i| {
-                iterate_hash_half_from_half(pre_images[i], encoding[i] as usize, pk_seed, adrs.with_chain(i as u32))
+            // chain_tips[i] = iterate_hash_full_from_full(preimage[i], encoding[i]) — 8-FE revealed tip
+            let chain_tips: [Digest; SPX_WOTS_LEN] = std::array::from_fn(|i| {
+                iterate_hash_full_from_full(
+                    half_to_full(pre_images[i]),
+                    encoding[i] as usize,
+                    pk_seed,
+                    adrs.with_chain(i as u32),
+                )
             });
 
             let pk_adrs = Adrs::wots_pk(layer_index, 0, 0);
             let expected_pubkey = WotsPublicKey(std::array::from_fn(|i| {
-                iterate_hash_half_from_half(
+                truncate_half(iterate_hash_full_from_full(
                     chain_tips[i],
                     SPX_WOTS_W - 1 - encoding[i] as usize,
                     pk_seed,
                     adrs.with_chain(i as u32).with_hash_step(encoding[i] as u32),
-                )
+                ))
             }))
             .hash(pk_seed, pk_adrs);
 
@@ -151,8 +160,13 @@ fn test_sphincs_wots_encode_complete() {
             let (randomness, encoding, _) =
                 find_randomness_for_wots_encoding(&message, adrs.adrs0, adrs.adrs1, &mut rng);
 
-            let chain_tips: [HalfDigest; SPX_WOTS_LEN] = std::array::from_fn(|i| {
-                iterate_hash_half_from_half(pre_images[i], encoding[i] as usize, pk_seed, adrs.with_chain(i as u32))
+            let chain_tips: [Digest; SPX_WOTS_LEN] = std::array::from_fn(|i| {
+                iterate_hash_full_from_full(
+                    half_to_full(pre_images[i]),
+                    encoding[i] as usize,
+                    pk_seed,
+                    adrs.with_chain(i as u32),
+                )
             });
 
             let wrong_pubkey: HalfDigest = rng.random();
@@ -192,7 +206,7 @@ fn test_sphincs_wots_encode_complete() {
                 }
             };
 
-            let chain_tips: [HalfDigest; SPX_WOTS_LEN] = std::array::from_fn(|_| rng.random());
+            let chain_tips: [Digest; SPX_WOTS_LEN] = std::array::from_fn(|_| rng.random());
             let fake_pubkey: HalfDigest = rng.random();
 
             let pk_adrs = Adrs::wots_pk(layer_index, 0, 0);
@@ -230,9 +244,9 @@ fn test_sphincs_wots_encode_complete() {
                 find_randomness_for_wots_encoding(&message, adrs.adrs0, adrs.adrs1, &mut rng);
 
             // Shift each chain tip one step beyond its correct signing position.
-            let chain_tips: [HalfDigest; SPX_WOTS_LEN] = std::array::from_fn(|i| {
-                iterate_hash_half_from_half(
-                    pre_images[i],
+            let chain_tips: [Digest; SPX_WOTS_LEN] = std::array::from_fn(|i| {
+                iterate_hash_full_from_full(
+                    half_to_full(pre_images[i]),
                     encoding[i] as usize + 1,
                     pk_seed,
                     adrs.with_chain(i as u32),
@@ -241,12 +255,12 @@ fn test_sphincs_wots_encode_complete() {
 
             let pk_adrs = Adrs::wots_pk(layer_index, 0, 0);
             let correct_pubkey = WotsPublicKey(std::array::from_fn(|i| {
-                iterate_hash_half_from_half(
-                    pre_images[i],
+                truncate_half(iterate_hash_full_from_full(
+                    half_to_full(pre_images[i]),
                     SPX_WOTS_W - 1,
                     pk_seed,
                     adrs.with_chain(i as u32).with_hash_step(0),
-                )
+                ))
             }))
             .hash(pk_seed, pk_adrs);
 

@@ -23,11 +23,14 @@ pub struct WotsPublicKey(pub [HalfDigest; V]);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct WotsSignature {
+    /// Revealed mid-chain tips at full 8-FE width (see iterate_hash_full_from_full): keeping
+    /// the full Poseidon state at the signing boundary makes the split sign+verify chain
+    /// compose exactly with the unsplit keygen chain.
     #[serde(
         with = "backend::array_serialization",
         bound(serialize = "F: Serialize", deserialize = "F: Deserialize<'de>")
     )]
-    pub chain_tips: [HalfDigest; V],
+    pub chain_tips: [Digest; V],
     pub randomness: [F; RANDOMNESS_LEN_FE],
 }
 
@@ -38,7 +41,14 @@ impl WotsSecretKey {
         Self {
             pre_images,
             public_key: WotsPublicKey(std::array::from_fn(|i| {
-                iterate_hash_half_from_half(pre_images[i], CHAIN_LENGTH - 1, pk_seed, base_adrs.with_chain(i as u32))
+                // Full chain: expand the 4-FE pre-image, run all CHAIN_LENGTH-1 steps 8-FE
+                // internally, then truncate the chain-final value to the 4-FE pubkey component.
+                truncate_half(iterate_hash_full_from_full(
+                    half_to_full(pre_images[i]),
+                    CHAIN_LENGTH - 1,
+                    pk_seed,
+                    base_adrs.with_chain(i as u32),
+                ))
             })),
         }
     }
@@ -60,8 +70,10 @@ impl WotsSecretKey {
         let encoding = wots_encode(message, adrs0, adrs1, &randomness).unwrap();
         WotsSignature {
             chain_tips: std::array::from_fn(|i| {
-                iterate_hash_half_from_half(
-                    self.pre_images[i],
+                // Reveal the mid-chain tip at full 8-FE width (no truncation), so the verifier
+                // resumes from the exact carried state and recovers the same pubkey.
+                iterate_hash_full_from_full(
+                    half_to_full(self.pre_images[i]),
                     encoding[i] as usize,
                     pk_seed,
                     base_adrs.with_chain(i as u32),
@@ -84,12 +96,14 @@ impl WotsSignature {
     ) -> Option<WotsPublicKey> {
         let encoding = wots_encode(message, adrs0, adrs1, &self.randomness)?;
         Some(WotsPublicKey(std::array::from_fn(|i| {
-            iterate_hash_half_from_half(
+            // Resume from the full 8-FE revealed tip and run the remaining steps, then truncate
+            // the chain-final value to the 4-FE pubkey component.
+            truncate_half(iterate_hash_full_from_full(
                 self.chain_tips[i],
                 CHAIN_LENGTH - 1 - encoding[i] as usize,
                 pk_seed,
                 base_adrs.with_chain(i as u32).with_hash_step(encoding[i] as u32),
-            )
+            ))
         })))
     }
 }
@@ -117,17 +131,27 @@ impl WotsPublicKey {
     }
 }
 
-/// Continue hashing from a 4-FE half-digest for `n` more steps with WOTS_HASH tweak.
+/// Run `n` WOTS+ chain steps on a full 8-FE state, keeping the full Poseidon output between
+/// steps (no per-step truncation). This is the core of the 8-FE-internal chain: the high half
+/// of each step's output is carried into the next step's right input rather than discarded and
+/// re-zeroed.
+///
 /// `adrs` must have type=WOTS_HASH with the correct chain_address and hash_address=current step.
 /// Each step increments hash_address via `adrs.next_hash_step()`.
-pub fn iterate_hash_half_from_half(a: HalfDigest, n: usize, pk_seed: HalfDigest, adrs: Adrs) -> HalfDigest {
+///
+/// The caller is responsible for the boundary conversions: expand a 4-FE start to
+/// `[start | 0,0,0,0]` before the first step, and `truncate_half` the result only at the very
+/// end of the *full* chain (the WOTS-pubkey component). Mid-chain values revealed in a
+/// signature are kept full-width (8 FE) so that splitting the chain at signing composes
+/// exactly with the unsplit keygen chain.
+pub fn iterate_hash_full_from_full(a: Digest, n: usize, pk_seed: HalfDigest, adrs: Adrs) -> Digest {
     let mut current_adrs = adrs;
     (0..n).fold(a, |acc, _| {
         let mut left = [F::ZERO; DIGEST_SIZE];
         left[..4].copy_from_slice(&pk_seed);
         left[4] = current_adrs.adrs0;
         left[5] = current_adrs.adrs1;
-        let result = truncate_half(poseidon16_compress_pair(&left, &half_to_full(acc)));
+        let result = poseidon16_compress_pair(&left, &acc);
         current_adrs = current_adrs.next_hash_step();
         result
     })
