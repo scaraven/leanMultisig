@@ -3,13 +3,18 @@ from sphincs_utils import *
 from utils import *
 
 @inline
-def _fors_merkle_verify_const(tree_index, pk_seed, leaf_index, leaf_secret, auth_path, out):
+def _fors_merkle_verify_const(tree_index, pk_seed, leaf_index, leaf_secret, out):
     # Inner implementation of fors_merkle_verify with compile-time tree_index.
     # Called via match_range in fors_merkle_verify.
     #
     # For each group of MERKLE_LEVEL_STEP Merkle levels, we hint MERKLE_LEVEL_STEP adrs1 values
     # and MERKLE_LEVEL_STEP remainders, range-checked to prove they correctly encode
     # node_index = leaf_index >> H at each absolute height H.
+    #
+    # Auth-path siblings are not passed in: each Merkle level streams its sibling from the
+    # "fors_auth" hint queue directly into its Poseidon right-input block (see
+    # do_5_merkle_block_fors_const). The leaf hash uses ZERO_VEC as its right half, so the
+    # leaf level consumes no sibling — the queue holds exactly the 15 auth-path nodes per tree.
     debug_assert(leaf_index < 2**SPX_FORS_HEIGHT)
 
     FORS_LEAF_ADRS0 = ADRS_FORS_TREE * (2 ** ADRS0_TYPE_SHIFT) + tree_index * (2 ** ADRS0_TREE_SHIFT)
@@ -43,26 +48,24 @@ def _fors_merkle_verify_const(tree_index, pk_seed, leaf_index, leaf_secret, auth
 
     do_5_fors_merkle_level(sub_indices[0], pk_seed, tree_index, 0,
                             adrs1_buf, rem_buf, leaf_index,
-                            leaf_node, auth_path, intermediate_nodes)
+                            leaf_node, intermediate_nodes)
     for i in unroll(1, N_GROUPS - 1):
         do_5_fors_merkle_level(sub_indices[i], pk_seed, tree_index, i * MERKLE_LEVEL_STEP,
                                 adrs1_buf + i * MERKLE_LEVEL_STEP,
                                 rem_buf   + i * MERKLE_LEVEL_STEP, leaf_index,
                                 intermediate_nodes + (i - 1) * HALF_DIGEST_LEN,
-                                auth_path + MERKLE_LEVEL_STEP * i * HALF_DIGEST_LEN,
                                 intermediate_nodes + i * HALF_DIGEST_LEN)
     do_5_fors_merkle_level(sub_indices[N_GROUPS - 1], pk_seed, tree_index,
                             (N_GROUPS - 1) * MERKLE_LEVEL_STEP,
                             adrs1_buf + (N_GROUPS - 1) * MERKLE_LEVEL_STEP,
                             rem_buf   + (N_GROUPS - 1) * MERKLE_LEVEL_STEP, leaf_index,
                             intermediate_nodes + (N_GROUPS - 2) * HALF_DIGEST_LEN,
-                            auth_path + MERKLE_LEVEL_STEP * (N_GROUPS - 1) * HALF_DIGEST_LEN,
                             out)
     return
 
 
 @inline
-def fors_merkle_verify(pk_seed, tree_index, leaf_index, leaf_secret, auth_path, out):
+def fors_merkle_verify(pk_seed, tree_index, leaf_index, leaf_secret, out):
     # Verify a single SPX_FORS_HEIGHT (15)-level binary Merkle auth path.
     # Dispatches on tree_index via match_range so that the compile-time tree_index reaches
     # _fors_merkle_verify_const (needed for compile-time ADRS constants).
@@ -72,10 +75,11 @@ def fors_merkle_verify(pk_seed, tree_index, leaf_index, leaf_secret, auth_path, 
     #   tree_index  — runtime or compile-time scalar: which FORS tree (0..SPX_FORS_TREES-1)
     #   leaf_index  — scalar < 2^SPX_FORS_HEIGHT
     #   leaf_secret — HALF_DIGEST_LEN FEs: raw FORS leaf secret (pre-image)
-    #   auth_path   — SPX_FORS_HEIGHT * HALF_DIGEST_LEN FEs: sibling hashes, bottom-up
+    # Siblings:
+    #   consumed level-by-level from the "fors_auth" hint queue (15 nodes per tree, bottom-up)
     # Output:
     #   out         — HALF_DIGEST_LEN FEs: computed Merkle root
-    match_range(tree_index, range(0, SPX_FORS_TREES), lambda t: _fors_merkle_verify_const(t, pk_seed, leaf_index, leaf_secret, auth_path, out))
+    match_range(tree_index, range(0, SPX_FORS_TREES), lambda t: _fors_merkle_verify_const(t, pk_seed, leaf_index, leaf_secret, out))
     return
 
 @inline
@@ -92,16 +96,18 @@ def fors_verify(pk_seed, fors_indices, fors_pk):
     #   pk_seed      — pointer to HALF_DIGEST_LEN (4) FEs: per-signer public seed
     #   fors_indices — SPX_FORS_TREES FEs, each < 2^SPX_FORS_HEIGHT
     # Hints:
-    #   fors_sig     — FORS_SIG_SIZE_FE FEs: introduced via hint_witness
+    #   fors_sig     — SPX_FORS_TREES * HALF_DIGEST_LEN FEs: the 9 leaf secrets, via hint_witness
+    #   fors_auth    — auth-path siblings, consumed level-by-level inside fors_merkle_verify
+    #                  (15 nodes per tree, bottom-up; same order as the legacy auth-path layout)
     # Output:
     #   fors_pk      — HALF_DIGEST_LEN (4) FEs: FORS public key (folded root hash)
-    fors_sig = Array(FORS_SIG_SIZE_FE)
-    hint_witness("fors_sig", fors_sig)
+    leaf_secrets = Array(SPX_FORS_TREES * HALF_DIGEST_LEN)
+    hint_witness("fors_sig", leaf_secrets)
 
     roots = Array(SPX_FORS_TREES * HALF_DIGEST_LEN)
     for t in unroll(0, SPX_FORS_TREES):
-        tree_base = fors_sig + t * (1 + SPX_FORS_HEIGHT) * HALF_DIGEST_LEN
-        fors_merkle_verify(pk_seed, t, fors_indices[t], tree_base, tree_base + HALF_DIGEST_LEN, roots + t * HALF_DIGEST_LEN)
+        leaf_secret = leaf_secrets + t * HALF_DIGEST_LEN
+        fors_merkle_verify(pk_seed, t, fors_indices[t], leaf_secret, roots + t * HALF_DIGEST_LEN)
 
     fold_roots(pk_seed, roots, fors_pk)
     return

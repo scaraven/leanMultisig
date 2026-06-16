@@ -4,7 +4,7 @@ from sphincs_wots import *
 
 
 @inline
-def hypertree_merkle_verify(pk_seed, tree_adrs0, layer_leaf_index, leaf_node, auth_path, root_out):
+def hypertree_merkle_verify(pk_seed, tree_adrs0, layer_leaf_index, leaf_node, root_out):
     # Verify a single SPX_TREE_HEIGHT (11)-level binary Merkle auth path within one
     # hypertree layer. 11 = 1 + 5 + 5, so we decompose as:
     #   bit0        — low bit, constrained to {0,1} via bit-squaring
@@ -18,7 +18,9 @@ def hypertree_merkle_verify(pk_seed, tree_adrs0, layer_leaf_index, leaf_node, au
     #   tree_adrs0       — scalar: packed TREE adrs0 = layer + (ADRS_TREE<<2) + (layer_tree_address<<5)
     #   layer_leaf_index — scalar < 2^SPX_TREE_HEIGHT; range-checked by decompose_message_digest
     #   leaf_node        — HALF_DIGEST_LEN (4) FEs: WOTS+ public key hash
-    #   auth_path        — SPX_TREE_HEIGHT * HALF_DIGEST_LEN (44) FEs: sibling hashes, bottom-up
+    # Siblings:
+    #   consumed level-by-level from the "ht_auth" hint queue (11 nodes per layer, bottom-up):
+    #   the bit0 level consumes one sibling, then each of the two do_5 groups consumes five.
     # Output:
     #   root_out         — HALF_DIGEST_LEN (4) FEs: computed layer root
     #
@@ -47,11 +49,16 @@ def hypertree_merkle_verify(pk_seed, tree_adrs0, layer_leaf_index, leaf_node, au
     assert rem_buf0[0] < 2
     assert layer_leaf_index == (adrs1_buf0[0] - 1 * (2 ** ADRS1_TREE_HT_SHIFT)) * 2 + rem_buf0[0]
 
+    # The bit0 direction is runtime (not a compile-time match arm), so this single level keeps
+    # the staged-sibling form: witness the sibling into a 4-FE buffer and pass it to
+    # adrs_compress_pair. The siblings for the two do_5 groups are streamed inside those calls.
+    sib0 = Array(HALF_DIGEST_LEN)
+    hint_witness("ht_auth", sib0)
     after_bit0 = Array(HALF_DIGEST_LEN)
     if bit0[0] == 0:
-        adrs_compress_pair(pk_seed, tree_adrs0, adrs1_buf0[0], leaf_node, auth_path, after_bit0)
+        adrs_compress_pair(pk_seed, tree_adrs0, adrs1_buf0[0], leaf_node, sib0, after_bit0)
     else:
-        adrs_compress_pair(pk_seed, tree_adrs0, adrs1_buf0[0], auth_path, leaf_node, after_bit0)
+        adrs_compress_pair(pk_seed, tree_adrs0, adrs1_buf0[0], sib0, leaf_node, after_bit0)
 
     # Levels 1–5 (tree_ht_start=1): five tweaked levels via do_5_hypertree_merkle_level.
     adrs1_chunk0 = Array(MERKLE_LEVEL_STEP)
@@ -60,7 +67,7 @@ def hypertree_merkle_verify(pk_seed, tree_adrs0, layer_leaf_index, leaf_node, au
     after_chunk0 = Array(HALF_DIGEST_LEN)
     do_5_hypertree_merkle_level(sub_indices[0], pk_seed, tree_adrs0, 1,
                                  adrs1_chunk0, rem_chunk0, layer_leaf_index,
-                                 after_bit0, auth_path + HALF_DIGEST_LEN, after_chunk0)
+                                 after_bit0, after_chunk0)
 
     # Levels 6–10 (tree_ht_start=6): five tweaked levels via do_5_hypertree_merkle_level.
     adrs1_chunk1 = Array(MERKLE_LEVEL_STEP)
@@ -68,7 +75,7 @@ def hypertree_merkle_verify(pk_seed, tree_adrs0, layer_leaf_index, leaf_node, au
     hint_fors_node_adrs(adrs1_chunk1, rem_chunk1, layer_leaf_index, 6)
     do_5_hypertree_merkle_level(sub_indices[1], pk_seed, tree_adrs0, 6,
                                  adrs1_chunk1, rem_chunk1, layer_leaf_index,
-                                 after_chunk0, auth_path + (1 + MERKLE_LEVEL_STEP) * HALF_DIGEST_LEN, root_out)
+                                 after_chunk0, root_out)
     return
 
 @inline
@@ -86,8 +93,12 @@ def hypertree_verify(pk_seed, fors_pubkey, layer_leaf_indices, expected_pk):
     # layer_tree_address for l=0,1 is hinted (runtime); for l=2 it is always 0 (compile-time).
     #
     # Inputs:
-    #   hypertree_sig       — HYPERTREE_SIG_SIZE_FE (540) FEs; layout per layer l:
-    #                         [randomness(6) | adrs0(1) | adrs1(1) | chain_tips(128) | auth_path(44)]
+    #   hypertree_sig       — HYPERTREE_SIG_SIZE_FE FEs; layout per layer l:
+    #                         [randomness(6) | adrs0(1) | adrs1(1) | chain_tips(128)]
+    #                         (auth paths are no longer in this blob — see ht_auth below)
+    #   ht_auth             — auth-path siblings, consumed level-by-level inside
+    #                         hypertree_merkle_verify (11 nodes per layer, bottom-up; same order
+    #                         as the legacy per-layer auth-path layout)
     #   pk_seed             — pointer to HALF_DIGEST_LEN (4) FEs
     #   fors_pubkey         — HALF_DIGEST_LEN (4) FEs: output of fors_verify
     #   layer_leaf_indices  — SPX_D (3) FEs, precomputed by decompose_message_digest
@@ -107,13 +118,13 @@ def hypertree_verify(pk_seed, fors_pubkey, layer_leaf_indices, expected_pk):
     copy_4(fors_pubkey, msg_0)
     set_to_4_zeros(msg_0 + 4)
 
-    # Per-layer layout: randomness(6) | adrs0(1) | adrs1(1) | chain_tips(128) | auth_path(44) = 180 FEs.
-    layer_stride = RANDOMNESS_LEN + 2 + (SPX_WOTS_LEN + SPX_TREE_HEIGHT) * HALF_DIGEST_LEN
+    # Per-layer layout: randomness(6) | adrs0(1) | adrs1(1) | chain_tips(128) = 136 FEs.
+    # (Auth-path siblings are streamed via the ht_auth hint queue, not stored here.)
+    layer_stride = RANDOMNESS_LEN + 2 + SPX_WOTS_LEN * HALF_DIGEST_LEN
 
     # --- Layer 0 ---
     randomness_ptr_0 = hypertree_sig
     chain_tips_ptr_0 = randomness_ptr_0 + RANDOMNESS_LEN + 2
-    auth_path_ptr_0  = chain_tips_ptr_0 + SPX_WOTS_LEN * HALF_DIGEST_LEN
 
     layer_tree_address_0 = layer_tree_addresses[0]
     kp_adrs1_0        = layer_leaf_indices[0]
@@ -127,7 +138,7 @@ def hypertree_verify(pk_seed, fors_pubkey, layer_leaf_indices, expected_pk):
     tree_adrs0_0 = 0 + (ADRS_TREE * (2 ** ADRS0_TYPE_SHIFT)) + (layer_tree_address_0 * (2 ** ADRS0_TREE_SHIFT))
     layer_root_0 = Array(HALF_DIGEST_LEN)
     hypertree_merkle_verify(pk_seed, tree_adrs0_0, layer_leaf_indices[0],
-                             wots_leaf_0, auth_path_ptr_0, layer_root_0)
+                             wots_leaf_0, layer_root_0)
 
     msg_1 = Array(DIGEST_LEN)
     copy_4(layer_root_0, msg_1)
@@ -136,7 +147,6 @@ def hypertree_verify(pk_seed, fors_pubkey, layer_leaf_indices, expected_pk):
     # --- Layer 1 ---
     randomness_ptr_1 = hypertree_sig + layer_stride
     chain_tips_ptr_1 = randomness_ptr_1 + RANDOMNESS_LEN + 2
-    auth_path_ptr_1  = chain_tips_ptr_1 + SPX_WOTS_LEN * HALF_DIGEST_LEN
 
     layer_tree_address_1 = layer_tree_addresses[1]
     kp_adrs1_1        = layer_leaf_indices[1]
@@ -150,7 +160,7 @@ def hypertree_verify(pk_seed, fors_pubkey, layer_leaf_indices, expected_pk):
     tree_adrs0_1 = 1 + (ADRS_TREE * (2 ** ADRS0_TYPE_SHIFT)) + (layer_tree_address_1 * (2 ** ADRS0_TREE_SHIFT))
     layer_root_1 = Array(HALF_DIGEST_LEN)
     hypertree_merkle_verify(pk_seed, tree_adrs0_1, layer_leaf_indices[1],
-                             wots_leaf_1, auth_path_ptr_1, layer_root_1)
+                             wots_leaf_1, layer_root_1)
 
     msg_2 = Array(DIGEST_LEN)
     copy_4(layer_root_1, msg_2)
@@ -159,7 +169,6 @@ def hypertree_verify(pk_seed, fors_pubkey, layer_leaf_indices, expected_pk):
     # --- Layer 2 (final): tree_address is always 0 ---
     randomness_ptr_2 = hypertree_sig + 2 * layer_stride
     chain_tips_ptr_2 = randomness_ptr_2 + RANDOMNESS_LEN + 2
-    auth_path_ptr_2  = chain_tips_ptr_2 + SPX_WOTS_LEN * HALF_DIGEST_LEN
 
     kp_adrs1_2        = layer_leaf_indices[2]
     wots_hash_adrs0_2 = 2 + (ADRS_WOTS_HASH * (2 ** ADRS0_TYPE_SHIFT))
@@ -171,5 +180,5 @@ def hypertree_verify(pk_seed, fors_pubkey, layer_leaf_indices, expected_pk):
 
     tree_adrs0_2 = 2 + (ADRS_TREE * (2 ** ADRS0_TYPE_SHIFT))
     hypertree_merkle_verify(pk_seed, tree_adrs0_2, layer_leaf_indices[2],
-                             wots_leaf_2, auth_path_ptr_2, expected_pk)
+                             wots_leaf_2, expected_pk)
     return

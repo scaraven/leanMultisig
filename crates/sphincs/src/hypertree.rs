@@ -63,6 +63,31 @@ impl HypertreeSignature {
         }
         out
     }
+
+    /// Flatten the hypertree signature without the auth paths, for the "hypertree_sig" hint queue.
+    /// Per layer: `[randomness_with_adrs(8) | chain_tips(SPX_WOTS_LEN * HALF_DIGEST_SIZE)]`.
+    pub fn flatten_hypertree_sig_no_auth(&self) -> Vec<F> {
+        let mut out = Vec::new();
+        for layer in self.layers.iter() {
+            out.extend_from_slice(&layer.randomness_with_adrs);
+            out.extend(layer.wots_sig.chain_tips.iter().flatten().copied());
+        }
+        out
+    }
+
+    /// The hypertree auth-path siblings as one buffer per sibling, for the "ht_auth" hint queue.
+    /// The zkDSL issues one `hint_witness("ht_auth", ...)` call per Merkle level, so each sibling
+    /// is a separate queue entry. Order: per layer, the SPX_TREE_HEIGHT siblings bottom-up — the
+    /// same order the levels consume them (one for the bit0 level, then five per do_5 group).
+    pub fn hypertree_auth_buffers(&self) -> Vec<Vec<F>> {
+        let mut out = Vec::new();
+        for layer in self.layers.iter() {
+            for node in &layer.auth_path {
+                out.push(node.to_vec());
+            }
+        }
+        out
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

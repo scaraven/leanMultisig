@@ -20,13 +20,12 @@ def main():
     leaf_node = Array(HALF_DIGEST_LEN)
     hint_witness("leaf_node", leaf_node)
 
-    auth_path = Array(SPX_TREE_HEIGHT * HALF_DIGEST_LEN)
-    hint_witness("auth_path", auth_path)
-
     expected_root = Array(HALF_DIGEST_LEN)
     hint_witness("expected_root", expected_root)
 
+    # Auth-path siblings are streamed level-by-level from the "ht_auth" queue inside
+    # hypertree_merkle_verify (11 siblings, bottom-up).
     out = Array(HALF_DIGEST_LEN)
-    hypertree_merkle_verify(pk_seed, tree_adrs0, layer_leaf_index, leaf_node, auth_path, out)
+    hypertree_merkle_verify(pk_seed, tree_adrs0, layer_leaf_index, leaf_node, out)
     copy_4(out, expected_root)
     return

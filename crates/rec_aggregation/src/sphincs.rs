@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use sphincs::{
     HALF_DIGEST_SIZE, MESSAGE_LEN_FE,
     core::{SphincsPublicKey, SphincsSig, extract_digest_parts, hmsg},
-    fors_sig_to_flat,
+    fors_auth_buffers, fors_leaf_secrets_to_flat,
 };
 use sphincs::{SPX_D, SPX_TREE_HEIGHT};
 use std::collections::HashMap;
@@ -119,14 +119,28 @@ fn build_signer_hints(
         .entry("digest_uppers_fors".to_string())
         .or_default()
         .push(digest_fors_uppers);
+    // FORS and hypertree auth-path siblings are streamed via dedicated hint queues
+    // ("fors_auth"/"ht_auth") and placed directly into each Merkle level's Poseidon
+    // right-input block by the zkDSL, so the committed "*_sig" blobs carry no siblings.
+    // The zkDSL issues one hint_witness call per Merkle level, so each sibling is one queue
+    // entry (extend, not push). Order matches the legacy in-blob auth-path order, and the
+    // per-signer entry count is constant — required for parallel_range hint replay.
     hints
         .entry("fors_sig".to_string())
         .or_default()
-        .push(fors_sig_to_flat(&sig.fors_sig));
+        .push(fors_leaf_secrets_to_flat(&sig.fors_sig));
+    hints
+        .entry("fors_auth".to_string())
+        .or_default()
+        .extend(fors_auth_buffers(&sig.fors_sig));
     hints
         .entry("hypertree_sig".to_string())
         .or_default()
-        .push(sig.hypertree_sig.flatten_hypertree_sig());
+        .push(sig.hypertree_sig.flatten_hypertree_sig_no_auth());
+    hints
+        .entry("ht_auth".to_string())
+        .or_default()
+        .extend(sig.hypertree_sig.hypertree_auth_buffers());
 
     let tree_address = leaf_indices[1] | (leaf_indices[2] << SPX_TREE_HEIGHT);
     let layer_tree_addresses: Vec<F> = (0..SPX_D)

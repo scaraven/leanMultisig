@@ -20,14 +20,13 @@ def main():
     leaf_secret = Array(HALF_DIGEST_LEN)
     hint_witness("leaf_secret", leaf_secret)
 
-    auth_path = Array(SPX_FORS_HEIGHT * HALF_DIGEST_LEN)
-    hint_witness("auth_path", auth_path)
-
     expected_root = Array(HALF_DIGEST_LEN)
     hint_witness("expected_root", expected_root)
 
+    # Auth-path siblings are streamed level-by-level from the "fors_auth" queue inside
+    # fors_merkle_verify (15 siblings, bottom-up).
     out = Array(HALF_DIGEST_LEN)
-    fors_merkle_verify(pk_seed, tree_index, leaf_index, leaf_secret, auth_path, out)
+    fors_merkle_verify(pk_seed, tree_index, leaf_index, leaf_secret, out)
 
     for i in unroll(0, HALF_DIGEST_LEN):
         assert expected_root[i] == out[i]

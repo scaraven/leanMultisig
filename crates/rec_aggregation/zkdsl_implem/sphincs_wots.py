@@ -14,13 +14,16 @@ def _iterate_hash_const_tweaked(input, k, pk_seed, adrs0, adrs1_start, output):
     if k == 0:
         copy_4(input, output)
     elif k == 1:
-        adrs_compress_pair(pk_seed, adrs0, adrs1_start, input, ZERO_VEC_PTR, output)
+        tweak5 = make_tweak5(pk_seed, adrs0)
+        adrs_compress_pair_t5(tweak5, adrs1_start, input, ZERO_VEC_PTR, output)
     else:
+        # adrs0 is constant across the chain steps: build the tweak prefix once.
+        tweak5 = make_tweak5(pk_seed, adrs0)
         states = Array((k - 1) * HALF_DIGEST_LEN)
-        adrs_compress_pair(pk_seed, adrs0, adrs1_start, input, ZERO_VEC_PTR, states)
+        adrs_compress_pair_t5(tweak5, adrs1_start, input, ZERO_VEC_PTR, states)
         for j in unroll(1, k - 1):
-            adrs_compress_pair(pk_seed, adrs0, adrs1_start + j * (2 ** ADRS1_HASH_SHIFT), states + (j - 1) * HALF_DIGEST_LEN, ZERO_VEC_PTR, states + j * HALF_DIGEST_LEN)
-        adrs_compress_pair(pk_seed, adrs0, adrs1_start + (k - 1) * (2 ** ADRS1_HASH_SHIFT), states + (k - 2) * HALF_DIGEST_LEN, ZERO_VEC_PTR, output)
+            adrs_compress_pair_t5(tweak5, adrs1_start + j * (2 ** ADRS1_HASH_SHIFT), states + (j - 1) * HALF_DIGEST_LEN, ZERO_VEC_PTR, states + j * HALF_DIGEST_LEN)
+        adrs_compress_pair_t5(tweak5, adrs1_start + (k - 1) * (2 ** ADRS1_HASH_SHIFT), states + (k - 2) * HALF_DIGEST_LEN, ZERO_VEC_PTR, output)
     return
 
 

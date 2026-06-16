@@ -266,6 +266,30 @@ pub fn fors_sig_to_flat(sig: &ForsSignature) -> Vec<F> {
     out
 }
 
+/// Flatten only the FORS leaf secrets (one HalfDigest per tree), for the "fors_sig" hint queue.
+/// Layout: `[leaf_secret_0 | leaf_secret_1 | ... | leaf_secret_{k-1}]`.
+pub fn fors_leaf_secrets_to_flat(sig: &ForsSignature) -> Vec<F> {
+    let mut out = Vec::with_capacity(SPX_FORS_TREES * HALF_DIGEST_SIZE);
+    for tree in &sig.trees {
+        out.extend_from_slice(&tree.leaf_secret);
+    }
+    out
+}
+
+/// The FORS auth-path siblings as one buffer per sibling, for the "fors_auth" hint queue.
+/// The zkDSL issues one `hint_witness("fors_auth", ...)` call per Merkle level (each writing
+/// one HALF_DIGEST_SIZE sibling), so each sibling must be a separate queue entry. Order: per
+/// tree, the SPX_FORS_HEIGHT siblings bottom-up — the same order the levels consume them.
+pub fn fors_auth_buffers(sig: &ForsSignature) -> Vec<Vec<F>> {
+    let mut out = Vec::with_capacity(SPX_FORS_TREES * SPX_FORS_HEIGHT);
+    for tree in &sig.trees {
+        for node in &tree.auth_path {
+            out.push(node.to_vec());
+        }
+    }
+    out
+}
+
 /// Reconstruct a `ForsSignature` from a flat `Vec<F>` produced by `fors_sig_to_flat`.
 pub fn fors_sig_from_flat(flat: &[F]) -> Option<ForsSignature> {
     if flat.len() != FORS_SIG_SIZE_FE {

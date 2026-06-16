@@ -7,7 +7,7 @@ use sphincs::{
     HALF_DIGEST_SIZE, HalfDigest, SPX_D, SPX_FORS_HEIGHT, SPX_FORS_TREES, SPX_TREE_HEIGHT, SPX_WOTS_LEN, SPX_WOTS_W,
     address::Adrs,
     core::prf,
-    fold_roots, fors_key_gen, fors_sig_to_flat, fors_sign, fors_sign_single_tree,
+    fold_roots, fors_auth_buffers, fors_key_gen, fors_leaf_secrets_to_flat, fors_sign, fors_sign_single_tree,
     hypertree::{HypertreeSecretKey, build_layer_tree, extract_auth_path, hypertree_sign},
     wots::{WotsPublicKey, WotsSecretKey, find_randomness_for_wots_encoding, iterate_hash_half_from_half, wots_encode},
 };
@@ -293,9 +293,10 @@ fn test_sphincs_fors_merkle_verify() {
             ("tree_index".to_string(), vec![vec![F::from_usize(tree)]]),
             ("leaf_index".to_string(), vec![vec![F::from_usize(leaf_index)]]),
             ("leaf_secret".to_string(), vec![sig.leaf_secret.to_vec()]),
+            // One queue entry per sibling (one hint_witness call per Merkle level), bottom-up.
             (
-                "auth_path".to_string(),
-                vec![sig.auth_path.iter().flatten().copied().collect()],
+                "fors_auth".to_string(),
+                sig.auth_path.iter().map(|n| n.to_vec()).collect(),
             ),
             ("expected_root".to_string(), vec![root.to_vec()]),
         ]);
@@ -322,7 +323,8 @@ fn test_sphincs_fors_verify() {
         let root = fors_pk.0;
 
         let sig = fors_sign(&fors_sk, &leaf_indices);
-        let sig_flat = fors_sig_to_flat(&sig);
+        let leaf_secrets = fors_leaf_secrets_to_flat(&sig);
+        let auth_buffers = fors_auth_buffers(&sig);
 
         let hints = HashMap::from([
             ("pk_seed".to_string(), vec![pk_seed.to_vec()]),
@@ -331,7 +333,8 @@ fn test_sphincs_fors_verify() {
                 vec![leaf_indices.iter().map(|&idx| F::from_usize(idx)).collect()],
             ),
             ("expected_root".to_string(), vec![root.to_vec()]),
-            ("fors_sig".to_string(), vec![sig_flat.to_vec()]),
+            ("fors_sig".to_string(), vec![leaf_secrets.clone()]),
+            ("fors_auth".to_string(), auth_buffers.clone()),
         ]);
 
         let witness = ExecutionWitness {
@@ -351,7 +354,8 @@ fn test_sphincs_fors_verify() {
                 vec![leaf_indices.iter().map(|&idx| F::from_usize(idx)).collect()],
             ),
             ("expected_root".to_string(), vec![root_wrong.to_vec()]),
-            ("fors_sig".to_string(), vec![sig_flat.to_vec()]),
+            ("fors_sig".to_string(), vec![leaf_secrets.clone()]),
+            ("fors_auth".to_string(), auth_buffers.clone()),
         ]);
 
         let witness_wrong = ExecutionWitness {
@@ -408,9 +412,10 @@ fn test_sphincs_hypertree_merkle_verify() {
                 vec![vec![F::from_usize(layer_leaf_index)]],
             ),
             ("leaf_node".to_string(), vec![leaf_node.to_vec()]),
+            // One queue entry per sibling (one hint_witness call per Merkle level), bottom-up.
             (
-                "auth_path".to_string(),
-                vec![auth_path.iter().flatten().copied().collect()],
+                "ht_auth".to_string(),
+                auth_path.iter().map(|n| n.to_vec()).collect(),
             ),
             ("expected_root".to_string(), vec![root.to_vec()]),
         ]);
@@ -446,7 +451,8 @@ fn test_sphincs_hypertree_verify() {
             let message = sphincs::wots::half_to_full(fors_pk);
 
             let sig = hypertree_sign(&sk, &message, leaf_index, tree_address);
-            let sig_flat = sig.flatten_hypertree_sig();
+            let sig_flat = sig.flatten_hypertree_sig_no_auth();
+            let auth_buffers = sig.hypertree_auth_buffers();
 
             // layer_leaf_indices: layer 0 = leaf_index; layer l>0 = (tree_address >> ((l-1)*SPX_TREE_HEIGHT)) & TREE_MASK
             let tree_mask = (1 << SPX_TREE_HEIGHT) - 1;
@@ -473,6 +479,7 @@ fn test_sphincs_hypertree_verify() {
                 ("layer_tree_addresses".to_string(), vec![layer_tree_addresses]),
                 ("expected_pk".to_string(), vec![pk_root.to_vec()]),
                 ("hypertree_sig".to_string(), vec![sig_flat]),
+                ("ht_auth".to_string(), auth_buffers),
             ]);
             let witness = ExecutionWitness {
                 preamble_memory_len: PREAMBLE_MEMORY_LEN,

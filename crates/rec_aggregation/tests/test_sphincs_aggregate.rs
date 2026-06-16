@@ -8,7 +8,7 @@ use sphincs::{
     RANDOMNESS_LEN_FE, SPX_D, SPX_TREE_BITS, SPX_TREE_HEIGHT, SPX_WOTS_LEN,
     address::Adrs,
     core::{SphincsSecretKey, extract_digest_parts, hmsg},
-    fors_sig_to_flat, hypertree_sign,
+    fors_auth_buffers, fors_leaf_secrets_to_flat, hypertree_sign,
     wots::{half_to_full, truncate_half},
 };
 use std::collections::HashMap;
@@ -118,13 +118,14 @@ fn build_sphincs_hints(seed: [u8; 20], message: [F; MESSAGE_LEN_FE]) -> HashMap<
         leaf_uppers.iter().map(|&u| split_leaf_upper(u)).unzip();
     let digest_fors_uppers: Vec<F> = fors_uppers.iter().map(|&u| F::from_usize(u)).collect();
 
-    let fors_sig_flat = fors_sig_to_flat(&sig.fors_sig);
-    let hypertree_sig_flat = sig.hypertree_sig.flatten_hypertree_sig();
+    let fors_leaf_secrets = fors_leaf_secrets_to_flat(&sig.fors_sig);
+    let fors_auth = fors_auth_buffers(&sig.fors_sig);
+    let hypertree_sig_flat = sig.hypertree_sig.flatten_hypertree_sig_no_auth();
+    let ht_auth = sig.hypertree_sig.hypertree_auth_buffers();
 
-    // Per layer: randomness_with_adrs(RANDOMNESS_LEN_FE+2) + chain_tips(SPX_WOTS_LEN*HALF_DIGEST_SIZE)
-    //            + auth_path(SPX_TREE_HEIGHT*HALF_DIGEST_SIZE)
-    let expected_hypertree_len =
-        SPX_D * ((RANDOMNESS_LEN_FE + 2) + (SPX_WOTS_LEN + SPX_TREE_HEIGHT) * HALF_DIGEST_SIZE);
+    // Per layer (no auth paths — those go to ht_auth):
+    //   randomness_with_adrs(RANDOMNESS_LEN_FE+2) + chain_tips(SPX_WOTS_LEN*HALF_DIGEST_SIZE)
+    let expected_hypertree_len = SPX_D * ((RANDOMNESS_LEN_FE + 2) + SPX_WOTS_LEN * HALF_DIGEST_SIZE);
     assert_eq!(hypertree_sig_flat.len(), expected_hypertree_len);
 
     // pk hint: [pk_seed(4) | pk_root(4)] — 8 FEs total, matching DIGEST_LEN in the circuit.
@@ -142,8 +143,10 @@ fn build_sphincs_hints(seed: [u8; 20], message: [F; MESSAGE_LEN_FE]) -> HashMap<
         ("digest_uppers_low".to_string(), vec![digest_uppers_low]),
         ("digest_uppers_high".to_string(), vec![digest_uppers_high]),
         ("digest_uppers_fors".to_string(), vec![digest_fors_uppers]),
-        ("fors_sig".to_string(), vec![fors_sig_flat]),
+        ("fors_sig".to_string(), vec![fors_leaf_secrets]),
+        ("fors_auth".to_string(), fors_auth),
         ("hypertree_sig".to_string(), vec![hypertree_sig_flat]),
+        ("ht_auth".to_string(), ht_auth),
         ("layer_tree_addresses".to_string(), vec![layer_tree_addresses]),
     ])
 }
@@ -243,9 +246,10 @@ fn test_hypertree_merkle_verify() {
             ),
             ("layer_leaf_index".to_string(), vec![vec![F::from_usize(leaf_idx)]]),
             ("leaf_node".to_string(), vec![leaf_node.to_vec()]),
+            // One queue entry per sibling (one hint_witness call per Merkle level), bottom-up.
             (
-                "auth_path".to_string(),
-                vec![layer0.auth_path.iter().flatten().copied().collect()],
+                "ht_auth".to_string(),
+                layer0.auth_path.iter().map(|n| n.to_vec()).collect(),
             ),
             ("expected_root".to_string(), vec![expected_root.to_vec()]),
         ]);
@@ -291,7 +295,8 @@ fn test_hypertree_verify() {
                     vec![layer_leaf_indices.iter().map(|&i| F::from_usize(i)).collect()],
                 ),
                 ("expected_pk".to_string(), vec![expected.to_vec()]),
-                ("hypertree_sig".to_string(), vec![sig.flatten_hypertree_sig()]),
+                ("hypertree_sig".to_string(), vec![sig.flatten_hypertree_sig_no_auth()]),
+                ("ht_auth".to_string(), sig.hypertree_auth_buffers()),
                 ("layer_tree_addresses".to_string(), vec![layer_tree_addresses.clone()]),
             ])
         };
