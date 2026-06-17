@@ -78,6 +78,31 @@ def adrs_compress_pair(pk_seed, adrs0, adrs1, right_lo, right_hi, out):
 
 
 @inline
+def adrs_compress_pair_t5(tweak5, adrs1, right_lo, right_hi, out):
+    # Like adrs_compress_pair but the 5-FE tweak prefix [pk_seed | adrs0] is supplied pre-built,
+    # so the pk_seed copy + adrs0 set are paid once per constant-adrs0 scope rather than per call.
+    # The 8-FE right half is still assembled from two separate HALF_DIGEST_LEN halves.
+    #
+    # left = [tweak5[0..5] | adrs1, 0, 0]
+    #
+    # tweak5   — pointer to 5 FEs: [pk_seed | adrs0]
+    # adrs1    — scalar
+    # right_lo — pointer to HALF_DIGEST_LEN (4) FEs: first half of the Poseidon right input
+    # right_hi — pointer to HALF_DIGEST_LEN (4) FEs: second half of the Poseidon right input
+    # out      — pointer to HALF_DIGEST_LEN (4) FEs
+    left = Array(DIGEST_LEN)
+    copy_5(tweak5, left)
+    left[5] = adrs1
+    left[6] = 0
+    left[7] = 0
+    right = Array(DIGEST_LEN)
+    copy_4(right_lo, right)
+    copy_4(right_hi, right + HALF_DIGEST_LEN)
+    poseidon16_compress_half(left, right, out)
+    return
+
+
+@inline
 def make_tweak5(pk_seed, adrs0):
     # Build the 5-FE tweak prefix [pk_seed[0..4] | adrs0] used by adrs_compress_pair_t5.
     # Construct once per constant-adrs0 scope (a do_5_* group, a fold loop, a WOTS chain)
@@ -133,34 +158,6 @@ def adrs_compress_pair_t5_block_out8(tweak5, adrs1, right_block, out8):
 
 
 @inline
-def do_5_fors_merkle_level_const(k, pk_seed, tree_index, tree_ht_start, adrs1_ptr, rem_ptr, leaf_index, state_in, state_out):
-    # Advance MERKLE_LEVEL_STEP (5) levels of a FORS Merkle tree with tweaked Poseidon.
-    # k, tree_index, tree_ht_start are compile-time; adrs1_ptr, rem_ptr, leaf_index are runtime.
-    #
-    # k selects the left/right direction at each level (bit i of k).
-    #
-    # adrs1 for each level is provided by hint_fors_node_adrs and range-checked here:
-    #   adrs1_ptr[h] = (leaf_index >> H) | (H << ADRS1_TREE_HT_SHIFT)
-    #   rem_ptr[h]   = leaf_index % (1 << H)
-    # Constraint: leaf_index == (adrs1_ptr[h] - H * 2^ADRS1_TREE_HT_SHIFT) * 2^H + rem_ptr[h]
-    #             rem_ptr[h] < 2^H
-    #
-    # state_in  — HALF_DIGEST_LEN (4) FEs: current node
-    # state_out — HALF_DIGEST_LEN (4) FEs: output node after MERKLE_LEVEL_STEP compressions
-    #
-    # Siblings are not passed as an array: each level's sibling is streamed via
-    # hint_witness("fors_auth", ...) directly into the correct half of that level's 8-FE
-    # right-input block, so no right-half copy is needed (see do_5_merkle_block_const).
-    FORS_ADRS0 = ADRS_FORS_TREE * (2 ** ADRS0_TYPE_SHIFT) + tree_index * (2 ** ADRS0_TREE_SHIFT)
-
-    # adrs0 (FORS_ADRS0) is constant across all 5 levels: build the tweak prefix once.
-    tweak5 = make_tweak5(pk_seed, FORS_ADRS0)
-
-    do_5_merkle_block_fors_const(k, tweak5, tree_ht_start, adrs1_ptr, rem_ptr, leaf_index, state_in, state_out)
-    return
-
-
-@inline
 def _merkle_level_assert(adrs1_h, rem_h, H, leaf_index):
     # Range-check + reconstruction binding for one Merkle level (shared by FORS and hypertree).
     assert rem_h < 2 ** H
@@ -185,8 +182,17 @@ def sibling_half_offset(b):
 
 @inline
 def do_5_merkle_block_fors_const(k, tweak5, tree_ht_start, adrs1_ptr, rem_ptr, leaf_index, state_in, state_out):
-    # Advance MERKLE_LEVEL_STEP (5) levels with copy-free right-half assembly, hinting each
-    # sibling from the "fors_auth" queue. k (and hence all direction bits) is compile-time.
+    # Advance MERKLE_LEVEL_STEP (5) levels of a FORS Merkle tree with copy-free right-half
+    # assembly, hinting each sibling from the "fors_auth" queue. k, tree_ht_start are
+    # compile-time; adrs1_ptr, rem_ptr, leaf_index are runtime. k selects the direction at each
+    # level (bit i of k).
+    #
+    # tweak5 — pointer to 5 FEs [pk_seed | FORS_ADRS0], built once per FORS tree by the caller
+    # (constant across all levels of the tree, so it is hoisted out of this helper).
+    #
+    # adrs1 for each level is provided by hint_fors_node_adrs and range-checked here:
+    #   adrs1_ptr[h] = (leaf_index >> H) | (H << ADRS1_TREE_HT_SHIFT); rem_ptr[h] = leaf_index % 2^H
+    # Constraint: leaf_index == (adrs1_ptr[h] - H * 2^ADRS1_TREE_HT_SHIFT) * 2^H + rem_ptr[h].
     #
     # Per level i, the 8-FE Poseidon right input lives in blocks[i*DIGEST_LEN ..]. The running
     # state occupies the low half if bit b_i == 0 (state on the left) or the high half if b_i == 1
@@ -196,6 +202,8 @@ def do_5_merkle_block_fors_const(k, tweak5, tree_ht_start, adrs1_ptr, rem_ptr, l
     #
     # The levels are written out explicitly (rather than looped) because the hint_witness label
     # must be a string literal and the direction bits are distinct compile-time values.
+    # NOTE: structurally identical to do_5_merkle_block_ht_const except the "fors_auth" hint label;
+    # kept separate because hint_witness needs a string literal.
     b0 = k % 2
     b0r = (k - b0) / 2
     b1 = b0r % 2
@@ -242,39 +250,26 @@ def do_5_merkle_block_fors_const(k, tweak5, tree_ht_start, adrs1_ptr, rem_ptr, l
 
 
 @inline
-def do_5_fors_merkle_level(k, pk_seed, tree_index, tree_ht_start, adrs1_ptr, rem_ptr, leaf_index, state_in, state_out):
-    match_range(k, range(0, 2**MERKLE_LEVEL_STEP), lambda k_prime: do_5_fors_merkle_level_const(k_prime, pk_seed, tree_index, tree_ht_start, adrs1_ptr, rem_ptr, leaf_index, state_in, state_out))
-    return
-
-
-@inline
-def do_5_hypertree_merkle_level_const(k, pk_seed, tree_adrs0, tree_ht_start,
-                                       adrs1_ptr, rem_ptr, leaf_index,
-                                       state_in, state_out):
-    # Advance MERKLE_LEVEL_STEP (5) levels of an XMSS hypertree Merkle tree with tweaked Poseidon.
-    # Identical structure to do_5_fors_merkle_level_const but uses TREE tweak in adrs0.
-    # k, tree_ht_start are compile-time; tree_adrs0, leaf_index are runtime.
-    #
-    # tree_adrs0 = layer + (ADRS_TREE << ADRS0_TYPE_SHIFT) + (layer_tree_address << ADRS0_TREE_SHIFT)
-    # adrs1 per level: filled by hint_fors_node_adrs (reused — TREE and FORS_TREE share adrs1 layout).
-
-    # state_in  — HALF_DIGEST_LEN (4) FEs: current node
-    # state_out — HALF_DIGEST_LEN (4) FEs: output node after MERKLE_LEVEL_STEP compressions
-    #
-    # Siblings are streamed via hint_witness("ht_auth", ...) directly into the correct half of
-    # each level's 8-FE right-input block (see do_5_merkle_block_ht_const) — no right-half copy.
-
-    # adrs0 (tree_adrs0) is constant across all 5 levels: build the tweak prefix once.
-    tweak5 = make_tweak5(pk_seed, tree_adrs0)
-
-    do_5_merkle_block_ht_const(k, tweak5, tree_ht_start, adrs1_ptr, rem_ptr, leaf_index, state_in, state_out)
+def do_5_fors_merkle_level(k, tweak5, tree_ht_start, adrs1_ptr, rem_ptr, leaf_index, state_in, state_out):
+    match_range(k, range(0, 2**MERKLE_LEVEL_STEP), lambda k_prime: do_5_merkle_block_fors_const(k_prime, tweak5, tree_ht_start, adrs1_ptr, rem_ptr, leaf_index, state_in, state_out))
     return
 
 
 @inline
 def do_5_merkle_block_ht_const(k, tweak5, tree_ht_start, adrs1_ptr, rem_ptr, leaf_index, state_in, state_out):
-    # Hypertree counterpart of do_5_merkle_block_fors_const: identical structure, hinting each
-    # sibling from the "ht_auth" queue.
+    # Advance MERKLE_LEVEL_STEP (5) levels of an XMSS hypertree Merkle tree with copy-free
+    # right-half assembly, hinting each sibling from the "ht_auth" queue. k, tree_ht_start are
+    # compile-time; leaf_index is runtime.
+    #
+    # tweak5 — pointer to 5 FEs [pk_seed | tree_adrs0], built once per hypertree layer by the
+    # caller (tree_adrs0 is constant across all 11 levels of the layer, so it is hoisted out).
+    # adrs1 per level: filled by hint_fors_node_adrs (reused — TREE and FORS_TREE share adrs1 layout).
+    #
+    # state_in  — HALF_DIGEST_LEN (4) FEs: current node
+    # state_out — HALF_DIGEST_LEN (4) FEs: output node after MERKLE_LEVEL_STEP compressions
+    #
+    # NOTE: structurally identical to do_5_merkle_block_fors_const except the "ht_auth" hint label;
+    # kept separate because hint_witness needs a string literal.
     b0 = k % 2
     b0r = (k - b0) / 2
     b1 = b0r % 2
@@ -321,13 +316,13 @@ def do_5_merkle_block_ht_const(k, tweak5, tree_ht_start, adrs1_ptr, rem_ptr, lea
 
 
 @inline
-def do_5_hypertree_merkle_level(k, pk_seed, tree_adrs0, tree_ht_start,
+def do_5_hypertree_merkle_level(k, tweak5, tree_ht_start,
                                  adrs1_ptr, rem_ptr, leaf_index,
                                  state_in, state_out):
     match_range(k, range(0, 2**MERKLE_LEVEL_STEP),
-        lambda k_prime: do_5_hypertree_merkle_level_const(k_prime, pk_seed, tree_adrs0,
-                                                           tree_ht_start, adrs1_ptr, rem_ptr, leaf_index,
-                                                           state_in, state_out))
+        lambda k_prime: do_5_merkle_block_ht_const(k_prime, tweak5,
+                                                    tree_ht_start, adrs1_ptr, rem_ptr, leaf_index,
+                                                    state_in, state_out))
     return
 
 

@@ -27,6 +27,10 @@ def hypertree_merkle_verify(pk_seed, tree_adrs0, layer_leaf_index, leaf_node, ro
     # Precondition: layer_leaf_index < 2^SPX_TREE_HEIGHT
     debug_assert(layer_leaf_index < 2**SPX_TREE_HEIGHT)
 
+    # tree_adrs0 is constant across all 11 levels of this layer, so build the 5-FE tweak prefix
+    # [pk_seed | tree_adrs0] once and thread it into the bit0 compress and both do_5 groups.
+    tweak5 = make_tweak5(pk_seed, tree_adrs0)
+
     # Hint the low bit, constrain it to {0,1}, then derive the upper 10 bits.
     bit0 = Array(1)
     hint_decompose_bits_little(layer_leaf_index, bit0, 1)
@@ -51,21 +55,21 @@ def hypertree_merkle_verify(pk_seed, tree_adrs0, layer_leaf_index, leaf_node, ro
 
     # The bit0 direction is runtime (not a compile-time match arm), so this single level keeps
     # the staged-sibling form: witness the sibling into a 4-FE buffer and pass it to
-    # adrs_compress_pair. The siblings for the two do_5 groups are streamed inside those calls.
+    # adrs_compress_pair_t5. The siblings for the two do_5 groups are streamed inside those calls.
     sib0 = Array(HALF_DIGEST_LEN)
     hint_witness("ht_auth", sib0)
     after_bit0 = Array(HALF_DIGEST_LEN)
     if bit0[0] == 0:
-        adrs_compress_pair(pk_seed, tree_adrs0, adrs1_buf0[0], leaf_node, sib0, after_bit0)
+        adrs_compress_pair_t5(tweak5, adrs1_buf0[0], leaf_node, sib0, after_bit0)
     else:
-        adrs_compress_pair(pk_seed, tree_adrs0, adrs1_buf0[0], sib0, leaf_node, after_bit0)
+        adrs_compress_pair_t5(tweak5, adrs1_buf0[0], sib0, leaf_node, after_bit0)
 
     # Levels 1–5 (tree_ht_start=1): five tweaked levels via do_5_hypertree_merkle_level.
     adrs1_chunk0 = Array(MERKLE_LEVEL_STEP)
     rem_chunk0   = Array(MERKLE_LEVEL_STEP)
     hint_fors_node_adrs(adrs1_chunk0, rem_chunk0, layer_leaf_index, 1)
     after_chunk0 = Array(HALF_DIGEST_LEN)
-    do_5_hypertree_merkle_level(sub_indices[0], pk_seed, tree_adrs0, 1,
+    do_5_hypertree_merkle_level(sub_indices[0], tweak5, 1,
                                  adrs1_chunk0, rem_chunk0, layer_leaf_index,
                                  after_bit0, after_chunk0)
 
@@ -73,7 +77,7 @@ def hypertree_merkle_verify(pk_seed, tree_adrs0, layer_leaf_index, leaf_node, ro
     adrs1_chunk1 = Array(MERKLE_LEVEL_STEP)
     rem_chunk1   = Array(MERKLE_LEVEL_STEP)
     hint_fors_node_adrs(adrs1_chunk1, rem_chunk1, layer_leaf_index, 6)
-    do_5_hypertree_merkle_level(sub_indices[1], pk_seed, tree_adrs0, 6,
+    do_5_hypertree_merkle_level(sub_indices[1], tweak5, 6,
                                  adrs1_chunk1, rem_chunk1, layer_leaf_index,
                                  after_chunk0, root_out)
     return

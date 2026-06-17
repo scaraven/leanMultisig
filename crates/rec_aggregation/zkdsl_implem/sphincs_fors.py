@@ -17,9 +17,14 @@ def _fors_merkle_verify_const(tree_index, pk_seed, leaf_index, leaf_secret, out)
     # leaf level consumes no sibling — the queue holds exactly the 15 auth-path nodes per tree.
     debug_assert(leaf_index < 2**SPX_FORS_HEIGHT)
 
-    FORS_LEAF_ADRS0 = ADRS_FORS_TREE * (2 ** ADRS0_TYPE_SHIFT) + tree_index * (2 ** ADRS0_TREE_SHIFT)
+    # adrs0 (FORS_ADRS0) is constant across the leaf hash AND all 15 Merkle levels of this tree,
+    # so the 5-FE tweak prefix [pk_seed | adrs0] is built once here and threaded into every
+    # compression below (the leaf hash and the three do_5 groups).
+    FORS_ADRS0 = ADRS_FORS_TREE * (2 ** ADRS0_TYPE_SHIFT) + tree_index * (2 ** ADRS0_TREE_SHIFT)
+    tweak5 = make_tweak5(pk_seed, FORS_ADRS0)
+
     leaf_node = Array(HALF_DIGEST_LEN)
-    adrs_compress_pair(pk_seed, FORS_LEAF_ADRS0, leaf_index, leaf_secret, ZERO_VEC_PTR, leaf_node)
+    adrs_compress_pair_t5(tweak5, leaf_index, leaf_secret, ZERO_VEC_PTR, leaf_node)
 
     N_GROUPS = SPX_FORS_HEIGHT / MERKLE_LEVEL_STEP
 
@@ -36,7 +41,7 @@ def _fors_merkle_verify_const(tree_index, pk_seed, leaf_index, leaf_secret, out)
 
     # For each group, hint the adrs1 and remainder values for that group's 5 levels.
     # hint_fors_node_adrs(adrs1_ptr, rem_ptr, leaf_index, tree_ht_start) fills
-    # MERKLE_LEVEL_STEP slots at each pointer; values are range-checked in do_5_fors_merkle_level_const.
+    # MERKLE_LEVEL_STEP slots at each pointer; values are range-checked in do_5_merkle_block_fors_const.
     adrs1_buf = Array(N_GROUPS * MERKLE_LEVEL_STEP)
     rem_buf   = Array(N_GROUPS * MERKLE_LEVEL_STEP)
     for i in unroll(0, N_GROUPS):
@@ -46,16 +51,16 @@ def _fors_merkle_verify_const(tree_index, pk_seed, leaf_index, leaf_secret, out)
 
     intermediate_nodes = Array(HALF_DIGEST_LEN * (N_GROUPS - 1))
 
-    do_5_fors_merkle_level(sub_indices[0], pk_seed, tree_index, 0,
+    do_5_fors_merkle_level(sub_indices[0], tweak5, 0,
                             adrs1_buf, rem_buf, leaf_index,
                             leaf_node, intermediate_nodes)
     for i in unroll(1, N_GROUPS - 1):
-        do_5_fors_merkle_level(sub_indices[i], pk_seed, tree_index, i * MERKLE_LEVEL_STEP,
+        do_5_fors_merkle_level(sub_indices[i], tweak5, i * MERKLE_LEVEL_STEP,
                                 adrs1_buf + i * MERKLE_LEVEL_STEP,
                                 rem_buf   + i * MERKLE_LEVEL_STEP, leaf_index,
                                 intermediate_nodes + (i - 1) * HALF_DIGEST_LEN,
                                 intermediate_nodes + i * HALF_DIGEST_LEN)
-    do_5_fors_merkle_level(sub_indices[N_GROUPS - 1], pk_seed, tree_index,
+    do_5_fors_merkle_level(sub_indices[N_GROUPS - 1], tweak5,
                             (N_GROUPS - 1) * MERKLE_LEVEL_STEP,
                             adrs1_buf + (N_GROUPS - 1) * MERKLE_LEVEL_STEP,
                             rem_buf   + (N_GROUPS - 1) * MERKLE_LEVEL_STEP, leaf_index,
