@@ -3,15 +3,17 @@ from sphincs_utils import *
 
 
 @inline
-def _iterate_hash_const_tweaked(input, k, pk_seed, adrs0, adrs1_start, output):
+def _iterate_hash_const_tweaked(input, k, tweak5, adrs1_start, output):
     # Run k WOTS_HASH chain steps starting at hash_address = adrs1_start.
-    # adrs0, adrs1_start, and k are all compile-time constants at every call site.
+    # adrs1_start and k are all compile-time constants at every call site.
     #
     # The chain carries FULL 8-FE state between steps (the 8-FE Poseidon output of one step is
     # fed directly as the next step's right input — no truncation, no zero-write, no copy). This
     # matches the Rust reference iterate_hash_full_from_full: the revealed mid-chain tip is
     # 8-FE, and only the chain-final value (the WOTS-pubkey component) is truncated to 4 FE.
     #
+    # tweak5 — pointer to 5 FEs [pk_seed | adrs0], built once per WOTS instance by the caller
+    # (adrs0 is constant across all 32 chains of the instance, so it is hoisted out of here).
     # input  — pointer to DIGEST_LEN (8) FEs: the revealed 8-FE chain tip
     # output — pointer to HALF_DIGEST_LEN (4) FEs: chain end, truncated (fed to fold_wots_pubkey)
     if k == 0:
@@ -19,12 +21,9 @@ def _iterate_hash_const_tweaked(input, k, pk_seed, adrs0, adrs1_start, output):
         copy_4(input, output)
     elif k == 1:
         # Single step: full 8-FE input → 4-FE output (out4 truncating compress).
-        tweak5 = make_tweak5(pk_seed, adrs0)
         adrs_compress_pair_t5_block(tweak5, adrs1_start, input, output)
     else:
-        # adrs0 is constant across the chain steps: build the tweak prefix once.
         # First k-1 steps keep full 8-FE state (out8); the last step truncates to 4-FE.
-        tweak5 = make_tweak5(pk_seed, adrs0)
         states = Array((k - 1) * DIGEST_LEN)
         adrs_compress_pair_t5_block_out8(tweak5, adrs1_start, input, states)
         for j in unroll(1, k - 1):
@@ -34,14 +33,16 @@ def _iterate_hash_const_tweaked(input, k, pk_seed, adrs0, adrs1_start, output):
 
 
 @inline
-def iterate_hash_single(input, n, pk_seed, adrs0, kp_adrs1, chain_i, output):
+def iterate_hash_single(input, n, tweak5, kp_adrs1, chain_i, output):
     # Complete one WOTS+ chain: apply (SPX_WOTS_W - 1 - n) further hash steps.
     # n = encoding[chain_i] (the raw signing index, already hashed that many times).
     # chain_i is compile-time (from unroll), so adrs1_start inside the lambda is compile-time.
+    #
+    # tweak5 — pointer to 5 FEs [pk_seed | adrs0], built once per WOTS instance by the caller.
     debug_assert(n < SPX_WOTS_W)
     match_range(n, range(0, SPX_WOTS_W),
         lambda k: _iterate_hash_const_tweaked(
-            input, (SPX_WOTS_W - 1) - k, pk_seed, adrs0,
+            input, (SPX_WOTS_W - 1) - k, tweak5,
             kp_adrs1 + chain_i * (2 ** ADRS1_CHAIN_SHIFT) + k * (2 ** ADRS1_HASH_SHIFT),
             output))
     return
@@ -98,10 +99,13 @@ def wots_encode_and_complete(message, adrs0, adrs1, randomness, chain_tips, pk_s
     # (a truncated 4-FE value) is written DIRECTLY into its contiguous fold-buffer tip-slot
     # (tip i @ fold_buf + i * HALF_DIGEST_LEN), so the WOTS pubkey T-Sponge reads each absorb
     # block as a contiguous 8-FE pair with no copy (see fold_wots_pubkey).
+    # adrs0 (WOTS_HASH) is constant across all 32 chains of this WOTS instance, so build the
+    # 5-FE tweak prefix [pk_seed | adrs0] once and thread it into every chain completion.
+    chain_tweak5 = make_tweak5(pk_seed, adrs0)
     fold_buf = Array(fold_tips_len(SPX_WOTS_LEN))
     for i in unroll(0, SPX_WOTS_LEN):
         iterate_hash_single(chain_tips + i * DIGEST_LEN, encoding[i],
-                            pk_seed, adrs0, adrs1, i, fold_buf + i * HALF_DIGEST_LEN)
+                            chain_tweak5, adrs1, i, fold_buf + i * HALF_DIGEST_LEN)
 
     target_sum: Mut = encoding[0]
     for i in unroll(1, SPX_WOTS_LEN):
