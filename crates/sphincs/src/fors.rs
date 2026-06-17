@@ -137,41 +137,46 @@ fn fors_public_key_from_nodes(nodes: &[Vec<Vec<HalfDigest>>], pk_seed: HalfDiges
     ForsPublicKey(fold_roots(pk_seed, &roots))
 }
 
-/// Sequential left-fold of k roots into a single half-digest, tweaked with Adrs::fors_roots.
+/// Fold k roots into a single half-digest using a T-Sponge with replacement.
 ///
-/// Each step i uses Adrs::fors_roots(0, i as u32) as tweak:
-///   left  = [pk_seed[0..4] | adrs0, adrs1, 0, 0]
-///   right = [acc[0..4] | next_root[0..4]]
+/// Poseidon-16 in compression mode is used as a sponge (capacity 8 / rate 8): each compression
+/// absorbs a full 8-FE block of *two* roots by overwriting the rate, while the running
+/// accumulator lives in the capacity. The fixed sponge tweak is `Adrs::fors_roots(0, 0)`, fed
+/// directly as the first compression's left input (no priming call, and no per-step adrs1):
+///   IV    = [pk_seed[0..4] | adrs0, adrs1, 0, 0]
+///   block = [root_{2i}[0..4] | root_{2i+1}[0..4]]
+///   state = P16(state, block)
+/// The 8-FE Poseidon output is carried in full between calls; only the final squeeze truncates
+/// to a HalfDigest. When the root count is odd the final block's high half is zero-padded.
 pub fn fold_roots(pk_seed: HalfDigest, roots: &[HalfDigest]) -> HalfDigest {
     assert!(roots.len() >= 2, "fold_roots requires at least 2 roots");
 
-    let step = |acc: HalfDigest, (i, root): (usize, &HalfDigest)| -> HalfDigest {
-        let adrs = Adrs::fors_roots(0, i as u32);
-        let mut left = [F::ZERO; DIGEST_SIZE];
-        left[..4].copy_from_slice(&pk_seed);
-        left[4] = adrs.adrs0;
-        left[5] = adrs.adrs1;
-        let mut right = [F::ZERO; DIGEST_SIZE];
-        right[..4].copy_from_slice(&acc);
-        right[4..8].copy_from_slice(root);
-        truncate_half(poseidon16_compress_pair(&left, &right))
-    };
+    let adrs = Adrs::fors_roots(0, 0);
+    let mut iv = [F::ZERO; DIGEST_SIZE];
+    iv[..4].copy_from_slice(&pk_seed);
+    iv[4] = adrs.adrs0;
+    iv[5] = adrs.adrs1;
 
-    // Step 0: fold roots[0] and roots[1].
-    let adrs0 = Adrs::fors_roots(0, 0);
-    let mut left = [F::ZERO; DIGEST_SIZE];
-    left[..4].copy_from_slice(&pk_seed);
-    left[4] = adrs0.adrs0;
-    left[5] = adrs0.adrs1;
-    let mut right = [F::ZERO; DIGEST_SIZE];
-    right[..4].copy_from_slice(&roots[0]);
-    right[4..8].copy_from_slice(&roots[1]);
-    let init = truncate_half(poseidon16_compress_pair(&left, &right));
+    let mut block = [F::ZERO; DIGEST_SIZE];
+    block[..4].copy_from_slice(&roots[0]);
+    block[4..8].copy_from_slice(&roots[1]);
+    let mut state = poseidon16_compress_pair(&iv, &block);
 
-    roots[2..]
-        .iter()
-        .enumerate()
-        .fold(init, |acc, (i, root)| step(acc, (i + 1, root)))
+    let mut chunks = roots[2..].chunks_exact(2);
+    for pair in chunks.by_ref() {
+        block[..4].copy_from_slice(&pair[0]);
+        block[4..8].copy_from_slice(&pair[1]);
+        state = poseidon16_compress_pair(&state, &block);
+    }
+    // Odd root count: absorb the final lone root with a zero-padded high half.
+    let rem = chunks.remainder();
+    if let [root] = rem {
+        block = [F::ZERO; DIGEST_SIZE];
+        block[..4].copy_from_slice(root);
+        state = poseidon16_compress_pair(&state, &block);
+    }
+
+    truncate_half(state)
 }
 
 /// Sign a single tree in the FORS forest, revealing the leaf secret and auth path.

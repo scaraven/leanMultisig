@@ -95,12 +95,13 @@ def wots_encode_and_complete(message, adrs0, adrs1, randomness, chain_tips, pk_s
     # Step 3: complete each chain individually with WOTS_HASH tweak.
     # adrs1 passed as kp_adrs1 — contains only kp_addr (chain=0, hash=0).
     # chain_tips are revealed at full 8-FE width (DIGEST_LEN stride). Each completed chain end
-    # (a truncated 4-FE value) is written DIRECTLY into its interleaved fold-buffer tip-slot, so
-    # the WOTS pubkey fold needs no per-step right-half copy (see fold_wots_pubkey).
-    fold_buf = Array(fold_buf_len(SPX_WOTS_LEN))
+    # (a truncated 4-FE value) is written DIRECTLY into its contiguous fold-buffer tip-slot
+    # (tip i @ fold_buf + i * HALF_DIGEST_LEN), so the WOTS pubkey T-Sponge reads each absorb
+    # block as a contiguous 8-FE pair with no copy (see fold_wots_pubkey).
+    fold_buf = Array(fold_tips_len(SPX_WOTS_LEN))
     for i in unroll(0, SPX_WOTS_LEN):
         iterate_hash_single(chain_tips + i * DIGEST_LEN, encoding[i],
-                            pk_seed, adrs0, adrs1, i, tip_slot(fold_buf, i))
+                            pk_seed, adrs0, adrs1, i, fold_buf + i * HALF_DIGEST_LEN)
 
     target_sum: Mut = encoding[0]
     for i in unroll(1, SPX_WOTS_LEN):

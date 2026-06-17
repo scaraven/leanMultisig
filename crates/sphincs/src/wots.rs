@@ -109,25 +109,33 @@ impl WotsSignature {
 }
 
 impl WotsPublicKey {
-    /// Compress all V chain tips into a single HalfDigest.
+    /// Compress all V chain tips into a single HalfDigest using a T-Sponge with replacement.
     ///
-    /// Tweak layout (uniform with FORS and hypertree Merkle hashing):
-    ///   left  = [pk_seed[0..4] | adrs0, adrs1, 0, 0]   (fixed for all steps)
-    ///   right = [acc[0..4] | next_tip[0..4]]
+    /// Poseidon-16 in compression mode is used as a sponge (capacity 8 / rate 8): each
+    /// compression absorbs a full 8-FE block of *two* chain tips by overwriting the rate, while
+    /// the running accumulator lives in the capacity. This roughly halves the number of
+    /// compressions versus a per-tip left-fold (V/2 = 16 calls for V=32). The structured IV is
+    /// fed directly as the first compression's left input (no priming call):
+    ///   IV    = [pk_seed[0..4] | adrs0, adrs1, 0, 0]   (fixed sponge tweak)
+    ///   block = [tip_{2i}[0..4] | tip_{2i+1}[0..4]]
+    ///   state = P16(state, block)                       (replace rate with block)
+    /// The 8-FE Poseidon output is carried in full between calls; only the final squeeze
+    /// truncates to a HalfDigest. V is even, so no padding block is needed.
     pub fn hash(&self, pk_seed: HalfDigest, adrs: crate::address::Adrs) -> HalfDigest {
-        let mut left = [F::ZERO; 8];
-        left[..4].copy_from_slice(&pk_seed);
-        left[4] = adrs.adrs0;
-        left[5] = adrs.adrs1;
-        let mut right = [F::ZERO; 8];
-        right[..4].copy_from_slice(&self.0[0]);
-        right[4..8].copy_from_slice(&self.0[1]);
-        let init = truncate_half(poseidon16_compress_pair(&left, &right));
-        self.0[2..].iter().fold(init, |acc, &tip| {
-            right[..4].copy_from_slice(&acc);
-            right[4..8].copy_from_slice(&tip);
-            truncate_half(poseidon16_compress_pair(&left, &right))
-        })
+        let mut iv = [F::ZERO; 8];
+        iv[..4].copy_from_slice(&pk_seed);
+        iv[4] = adrs.adrs0;
+        iv[5] = adrs.adrs1;
+        let mut block = [F::ZERO; 8];
+        block[..4].copy_from_slice(&self.0[0]);
+        block[4..8].copy_from_slice(&self.0[1]);
+        let mut state = poseidon16_compress_pair(&iv, &block);
+        for pair in self.0[2..].chunks_exact(2) {
+            block[..4].copy_from_slice(&pair[0]);
+            block[4..8].copy_from_slice(&pair[1]);
+            state = poseidon16_compress_pair(&state, &block);
+        }
+        truncate_half(state)
     }
 }
 

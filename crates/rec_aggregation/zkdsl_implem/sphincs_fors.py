@@ -104,12 +104,16 @@ def fors_verify(pk_seed, fors_indices, fors_pk):
     leaf_secrets = Array(SPX_FORS_TREES * HALF_DIGEST_LEN)
     hint_witness("fors_sig", leaf_secrets)
 
-    # Each FORS tree root is written DIRECTLY into its interleaved fold-buffer tip-slot, so
-    # fold_roots reads each step's [acc | next_root] block contiguously with no copy.
-    fold_buf = Array(fold_buf_len(SPX_FORS_TREES))
+    # Each FORS tree root is written DIRECTLY into its contiguous fold-buffer tip-slot
+    # (root t @ fold_buf + t * HALF_DIGEST_LEN), so the fold_roots T-Sponge reads each absorb
+    # block as a contiguous 8-FE pair with no copy. SPX_FORS_TREES (9) is odd: the buffer holds
+    # one extra (10th) tip, zeroed here, that pads the final absorb block to [root8 | 0,0,0,0].
+    fold_buf = Array(fold_tips_len(SPX_FORS_TREES + 1))
     for t in unroll(0, SPX_FORS_TREES):
         leaf_secret = leaf_secrets + t * HALF_DIGEST_LEN
-        fors_merkle_verify(pk_seed, t, fors_indices[t], leaf_secret, tip_slot(fold_buf, t))
+        fors_merkle_verify(pk_seed, t, fors_indices[t], leaf_secret, fold_buf + t * HALF_DIGEST_LEN)
+    for i in unroll(0, HALF_DIGEST_LEN):
+        fold_buf[SPX_FORS_TREES * HALF_DIGEST_LEN + i] = 0
 
     fold_roots(pk_seed, fold_buf, fors_pk)
     return

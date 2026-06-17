@@ -331,94 +331,85 @@ def do_5_hypertree_merkle_level(k, pk_seed, tree_adrs0, tree_ht_start,
     return
 
 
-# A tweaked left-fold of n tips reads each step's Poseidon right input as the 8-FE block
-# [acc | next_tip]. To avoid copying acc and next_tip into a staging block per step, we lay the
-# tips out in an INTERLEAVED buffer so each block is already contiguous, and write each step's
-# accumulator in place into the slot immediately preceding the next tip.
+# The folds use a T-Sponge with replacement (Poseidon-16 compression mode, capacity 8 / rate 8):
+# each compression absorbs a full 8-FE block of TWO 4-FE tips by overwriting the rate, while the
+# running accumulator lives in the capacity. This roughly halves the compression count versus a
+# per-tip left-fold. The structured IV [tweak5 | adrs1, 0, 0] is fed directly as the first
+# compression's left input (no priming call); subsequent compressions take the previous full 8-FE
+# state as their left input. Only the final squeeze truncates to a 4-FE HalfDigest.
 #
-# Buffer of (n-1) * DIGEST_LEN FE. Define block i = buf[i*DIGEST_LEN .. i*DIGEST_LEN + DIGEST_LEN]
-# for i = 0..n-2. Layout reads: [tip0, tip1, acc0, tip2, acc1, tip3, ..., acc_{n-3}, tip_{n-1}].
-#   - tip[0] @ buf+0, tip[1] @ buf+HALF_DIGEST_LEN (the two halves of block 0)
-#   - tip[m] (m>=2) @ block (m-1) high half = buf + (m-1)*DIGEST_LEN + HALF_DIGEST_LEN
-#   - acc_i (output of step i) @ block (i+1) low half = buf + (i+1)*DIGEST_LEN
-# Step i reads block i (no copy) and writes acc_i into block i+1's low half (the slot just
-# before tip[i+2]); the last step writes the 4-FE `out`. acc-slots and tip-slots are disjoint,
-# so the write-once model is respected.
+# Tips are laid out CONTIGUOUSLY in `buf` (tip m @ buf + m * HALF_DIGEST_LEN), so absorb block i
+# is the 8-FE slice buf[2i*HALF_DIGEST_LEN ..][..DIGEST_LEN] with no copy. The producer writes each
+# tip directly into buf + m * HALF_DIGEST_LEN as it is computed.
 
 
 @inline
-def fold_buf_len(n):
-    # Size of the interleaved fold buffer for n tips: (n - 1) * DIGEST_LEN.
-    return n * DIGEST_LEN - DIGEST_LEN
+def fold_tips_len(n):
+    # Size of the contiguous tip buffer for n tips: n * HALF_DIGEST_LEN.
+    return n * HALF_DIGEST_LEN
 
 
 @inline
-def tip_slot(buf, m):
-    # Pointer to the slot for tip m within the interleaved buffer (m is compile-time).
-    # m == 0 -> buf; m >= 1 -> buf + (m-1)*DIGEST_LEN + HALF_DIGEST_LEN
-    # (m == 1 gives buf + HALF_DIGEST_LEN, the high half of block 0.)
-    slot: Mut = buf
-    if m != 0:
-        slot = buf + (m - 1) * DIGEST_LEN + HALF_DIGEST_LEN
-    return slot
+def _fold_tips_sponge(tweak5, adrs1, buf, n_pairs, out):
+    # Shared T-Sponge core. Absorbs n_pairs 8-FE blocks (2 tips each) from the contiguous buffer
+    # `buf` and squeezes the low 4 FE into `out`. n_pairs is compile-time and must be >= 1; the
+    # buffer must hold at least 2 * n_pairs tips, zero-padded if the true tip count is odd.
+    #
+    #   tweak5 — pointer to 5 FEs [pk_seed | adrs0]: the fixed sponge tweak prefix
+    #   adrs1  — scalar: occupies IV slot 5 (the only per-fold domain separator)
+    #   buf    — contiguous tip buffer, 2 * n_pairs tips of HALF_DIGEST_LEN FE each
+    #   out    — HALF_DIGEST_LEN (4) FEs: the squeezed digest
+    states = Array(n_pairs * DIGEST_LEN)
+
+    # Block 0: structured IV (left) absorbs the first pair (right) -> full 8-FE state.
+    adrs_compress_pair_t5_block_out8(tweak5, adrs1, buf, states)
+
+    # Blocks 1..n_pairs-2: previous full state absorbs the next pair.
+    for j in unroll(1, n_pairs - 1):
+        poseidon16_compress(states + (j - 1) * DIGEST_LEN, buf + j * DIGEST_LEN, states + j * DIGEST_LEN)
+
+    # Final block: squeeze the low half into the 4-FE `out`.
+    poseidon16_compress_half(states + (n_pairs - 2) * DIGEST_LEN, buf + (n_pairs - 1) * DIGEST_LEN, out)
+    return
 
 
 @inline
 def fold_wots_pubkey(pk_seed, adrs0, adrs1, buf, out):
     # Fold SPX_WOTS_LEN (32) completed chain tips into a single WOTS+ public key digest.
-    # Matches WotsPublicKey::hash() in wots.rs — tweaked left-fold:
-    #   left  = [pk_seed[0..4] | adrs0, adrs1, 0, 0]   (constant across all steps)
-    #   right = [acc[0..4] | next_tip[0..4]]
-    # adrs0/adrs1 encode Adrs::wots_pk(layer, tree_addr, kp_addr) — compile-time constants at all call sites.
-    # Costs 31 adrs_compress calls.
+    # Matches WotsPublicKey::hash() in wots.rs — T-Sponge with replacement (see notes above).
+    # adrs0/adrs1 encode Adrs::wots_pk(layer, tree_addr, kp_addr) — compile-time constants at all
+    # call sites. V=32 is even, so all 16 absorb blocks are full pairs. Costs 16 poseidon calls.
     #
     # Inputs:
     #   pk_seed — pointer to HALF_DIGEST_LEN (4) FEs: per-signer public seed
     #   adrs0   — scalar: packed layer/type/tree_address (WOTS_PK type)
     #   adrs1   — scalar: kp_addr (chain=0, hash=0)
-    #   buf     — interleaved fold buffer of fold_buf_len(SPX_WOTS_LEN) FE, with the 32 chain-end
-    #             HalfDigests pre-placed in their tip-slots by the producer (no packed copy)
+    #   buf     — contiguous tip buffer of fold_tips_len(SPX_WOTS_LEN) FE, with the 32 chain-end
+    #             HalfDigests pre-placed in tip order by the producer (no packed copy)
     # Output:
     #   out — HALF_DIGEST_LEN (4) FEs: folded WOTS+ public key hash
-    # adrs0 is constant across all 31 fold steps: build the tweak prefix once.
     tweak5 = make_tweak5(pk_seed, adrs0)
-
-    # Step 0: block 0 = [tip0 | tip1] -> acc0 into block 1's low half.
-    adrs_compress_pair_t5_block(tweak5, adrs1, buf, buf + DIGEST_LEN)
-
-    # Steps 1..n-3: block i = [acc_{i-1} | tip_{i+1}] -> acc_i into block i+1's low half.
-    for i in unroll(1, SPX_WOTS_LEN - 2):
-        adrs_compress_pair_t5_block(tweak5, adrs1, buf + i * DIGEST_LEN, buf + (i + 1) * DIGEST_LEN)
-
-    # Last step: block n-2 -> 4-FE out.
-    adrs_compress_pair_t5_block(tweak5, adrs1, buf + (SPX_WOTS_LEN - 2) * DIGEST_LEN, out)
+    _fold_tips_sponge(tweak5, adrs1, buf, SPX_WOTS_LEN / 2, out)
     return
+
 
 @inline
 def fold_roots(pk_seed, buf, out):
     # Fold SPX_FORS_TREES (9) FORS tree roots into the FORS public key digest.
-    # Tweaked left-fold matching fors.rs::fold_roots:
-    #   adrs0 = pack(layer=0, type=FORS_ROOTS, tree_addr=0)  — constant across all steps
-    #   adrs1 = i                                              — step index (kp_addr field)
-    #   right = [acc[0..4] | next_root[0..4]]
-    # Costs 8 adrs_compress calls.
+    # Matches fors.rs::fold_roots — T-Sponge with replacement (see notes above):
+    #   adrs0 = pack(layer=0, type=FORS_ROOTS, tree_addr=0)  — fixed IV tweak
+    #   adrs1 = 0                                             — no per-step domain separation
+    # SPX_FORS_TREES (9) is odd, so the buffer holds 10 tips with the 10th zero-padded; the final
+    # absorb block is [root8 | 0,0,0,0]. Costs ceil(9/2) = 5 poseidon calls.
     #
     # Inputs:
     #   pk_seed — pointer to HALF_DIGEST_LEN (4) FEs: per-signer public seed
-    #   buf     — interleaved fold buffer of fold_buf_len(SPX_FORS_TREES) FE, with the 9 roots
-    #             pre-placed in their tip-slots by the producer (fors_verify; no packed copy)
+    #   buf     — contiguous tip buffer of fold_tips_len(SPX_FORS_TREES + 1) FE, with the 9 roots
+    #             pre-placed in tip order and the trailing pad-tip zeroed by the producer
     # Output:
     #   out     — HALF_DIGEST_LEN (4) FEs: FORS public key hash
     FORS_ROOTS_ADRS0 = ADRS_FORS_ROOTS * (2 ** ADRS0_TYPE_SHIFT)  # layer=0, type=4, tree_addr=0 → 16
 
-    # adrs0 (FORS_ROOTS_ADRS0) is constant across all fold steps: build the tweak prefix once.
     tweak5 = make_tweak5(pk_seed, FORS_ROOTS_ADRS0)
-
-    # Step 0: block 0 = [root0 | root1], adrs1=0 -> acc0 into block 1's low half.
-    adrs_compress_pair_t5_block(tweak5, 0, buf, buf + DIGEST_LEN)
-
-    for i in unroll(1, SPX_FORS_TREES - 2):
-        adrs_compress_pair_t5_block(tweak5, i, buf + i * DIGEST_LEN, buf + (i + 1) * DIGEST_LEN)
-
-    adrs_compress_pair_t5_block(tweak5, SPX_FORS_TREES - 2, buf + (SPX_FORS_TREES - 2) * DIGEST_LEN, out)
+    _fold_tips_sponge(tweak5, 0, buf, (SPX_FORS_TREES + 1) / 2, out)
     return
