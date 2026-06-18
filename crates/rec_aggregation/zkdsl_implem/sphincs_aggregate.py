@@ -125,8 +125,14 @@ def sphincs_verify(pk, message):
 
     indices = decompose_message_digest(message_digest)
 
+    # Hypertree leaf position binding the FORS keypair (matches extract_digest_hash in core.rs):
+    #   idx_leaf = leaf_idx = indices[0]
+    #   idx_tree = lli1 | (lli2 << SPX_TREE_HEIGHT) = indices[1] + indices[2] * 2^SPX_TREE_HEIGHT
+    idx_leaf = indices[0]
+    idx_tree = indices[1] + indices[2] * (2 ** SPX_TREE_HEIGHT)
+
     fors_pk = Array(HALF_DIGEST_LEN)
-    fors_verify(pk_seed, indices + SPX_D, fors_pk)
+    fors_verify(pk_seed, idx_tree, idx_leaf, indices + SPX_D, fors_pk)
 
     hypertree_verify(pk_seed, fors_pk, indices, pk_root)
     return

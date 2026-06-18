@@ -60,9 +60,9 @@ def hypertree_merkle_verify(pk_seed, tree_adrs0, layer_leaf_index, leaf_node, ro
     hint_witness("ht_auth", sib0)
     after_bit0 = Array(HALF_DIGEST_LEN)
     if bit0[0] == 0:
-        adrs_compress_pair_t5(tweak5, adrs1_buf0[0], leaf_node, sib0, after_bit0)
+        adrs_compress_pair_t5(tweak5, adrs1_buf0[0], 0, leaf_node, sib0, after_bit0)
     else:
-        adrs_compress_pair_t5(tweak5, adrs1_buf0[0], sib0, leaf_node, after_bit0)
+        adrs_compress_pair_t5(tweak5, adrs1_buf0[0], 0, sib0, leaf_node, after_bit0)
 
     # Levels 1–5 (tree_ht_start=1): five tweaked levels via do_5_hypertree_merkle_level.
     adrs1_chunk0 = Array(MERKLE_LEVEL_STEP)

@@ -117,7 +117,7 @@ impl SphincsSecretKey {
 
         let (leaf_idx, tree_address, fors_indices) = extract_digest_hash(&message_digest);
 
-        let (fors_sk, _) = fors::fors_key_gen(self.sk_seed, self.pk_seed);
+        let (fors_sk, _) = fors::fors_key_gen(self.sk_seed, self.pk_seed, tree_address, leaf_idx);
         let fors_sig = fors::fors_sign(&fors_sk, &fors_indices);
         let fors_pk = fors_sk.public_key();
 
@@ -142,7 +142,7 @@ impl SphincsPublicKey {
 
         let (leaf_idx, tree_address, fors_indices) = extract_digest_hash(&message_digest);
 
-        let fors_pk = match fors::fors_verify(&sig.fors_sig, &fors_indices, self.pk_seed) {
+        let fors_pk = match fors::fors_verify(&sig.fors_sig, &fors_indices, self.pk_seed, tree_address, leaf_idx) {
             Ok(pk) => pk,
             Err(_) => return false,
         };

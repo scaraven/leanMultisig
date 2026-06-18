@@ -32,9 +32,12 @@ ADRS_FORS_ROOTS = 4
 ADRS_WOTS_PRF   = 5
 ADRS_FORS_PRF   = 6
 
-# Bit offsets within adrs0: layer(2) | type(3) | tree_address(22)
+# Bit offsets within adrs0: layer(2) | type(3) | tree_address(22) | fors_tree(4)
+SPX_TREE_BITS = 22
 ADRS0_TYPE_SHIFT = 2
 ADRS0_TREE_SHIFT = 5  # 2 + 3
+# FORS-internal tree number (0..SPX_FORS_TREES-1) packed above tree_address (FORS types only).
+ADRS0_FORS_TREE_SHIFT = 5 + SPX_TREE_BITS  # 27
 
 # Bit offsets within adrs1 (WOTS / FORS_ROOTS layout)
 SPX_KP_ADDR_BITS    = 22
@@ -49,51 +52,23 @@ ADRS1_TREE_HT_SHIFT = SPX_FORS_HEIGHT  # 15
 MERKLE_LEVEL_STEP = 5 # number of Merkle levels processed by do_3_merkle_level; must divide SPX_FORS_HEIGHT
 
 @inline
-def adrs_compress_pair(pk_seed, adrs0, adrs1, right_lo, right_hi, out):
-    # Variant of adrs_compress where the 8-FE right half is supplied as two separate
-    # HALF_DIGEST_LEN (4-FE) pointers, eliminating the staging Array + copy_4 pair that
-    # callers would otherwise need.
+def adrs_compress_pair_t5(tweak5, adrs1, adrs2, right_lo, right_hi, out):
+    # Compress with a pre-built 5-FE tweak prefix [pk_seed | adrs0] (built once per constant-adrs0
+    # scope) plus the two per-call tweak FEs adrs1, adrs2. The 8-FE right half is assembled from
+    # two separate HALF_DIGEST_LEN halves. Callers with only two tweaks pass adrs2 = 0.
     #
-    # left        = [pk_seed[0..4] | adrs0, adrs1, 0, 0]   (same as adrs_compress)
-    # right[0..4] = right_lo[0..4]
-    # right[4..8] = right_hi[0..4]
-    #
-    # pk_seed  — pointer to HALF_DIGEST_LEN (4) FEs
-    # adrs0    — scalar
-    # adrs1    — scalar
-    # right_lo — pointer to HALF_DIGEST_LEN (4) FEs: first half of the Poseidon right input
-    # right_hi — pointer to HALF_DIGEST_LEN (4) FEs: second half of the Poseidon right input
-    # out      — pointer to HALF_DIGEST_LEN (4) FEs
-    left = Array(DIGEST_LEN)
-    copy_4(pk_seed, left)
-    left[4] = adrs0
-    left[5] = adrs1
-    left[6] = 0
-    left[7] = 0
-    right = Array(DIGEST_LEN)
-    copy_4(right_lo, right)
-    copy_4(right_hi, right + HALF_DIGEST_LEN)
-    poseidon16_compress_half(left, right, out)
-    return
-
-
-@inline
-def adrs_compress_pair_t5(tweak5, adrs1, right_lo, right_hi, out):
-    # Like adrs_compress_pair but the 5-FE tweak prefix [pk_seed | adrs0] is supplied pre-built,
-    # so the pk_seed copy + adrs0 set are paid once per constant-adrs0 scope rather than per call.
-    # The 8-FE right half is still assembled from two separate HALF_DIGEST_LEN halves.
-    #
-    # left = [tweak5[0..5] | adrs1, 0, 0]
+    # left = [tweak5[0..5] | adrs1, adrs2, 0]
     #
     # tweak5   — pointer to 5 FEs: [pk_seed | adrs0]
-    # adrs1    — scalar
+    # adrs1    — scalar (e.g. idx_leaf / key_pair_address)
+    # adrs2    — scalar (e.g. FORS (tree_height, tree_index) Merkle coordinate; 0 if unused)
     # right_lo — pointer to HALF_DIGEST_LEN (4) FEs: first half of the Poseidon right input
     # right_hi — pointer to HALF_DIGEST_LEN (4) FEs: second half of the Poseidon right input
     # out      — pointer to HALF_DIGEST_LEN (4) FEs
     left = Array(DIGEST_LEN)
     copy_5(tweak5, left)
     left[5] = adrs1
-    left[6] = 0
+    left[6] = adrs2
     left[7] = 0
     right = Array(DIGEST_LEN)
     copy_4(right_lo, right)
@@ -115,22 +90,24 @@ def make_tweak5(pk_seed, adrs0):
 
 
 @inline
-def adrs_compress_pair_t5_block(tweak5, adrs1, right_block, out):
+def adrs_compress_pair_t5_block(tweak5, adrs1, adrs2, right_block, out):
     # Same as adrs_compress_pair_t5 but the 8-FE right half is supplied pre-assembled as a
     # single contiguous pointer, so no right-half copy is performed. Used by the Merkle level
     # helpers, where the running state is written directly into one half of right_block by the
-    # previous compression and the sibling is hint-placed into the other half.
+    # previous compression and the sibling is hint-placed into the other half. Callers with only
+    # two tweaks pass adrs2 = 0.
     #
-    # left = [tweak5[0..5] | adrs1, 0, 0]
+    # left = [tweak5[0..5] | adrs1, adrs2, 0]
     #
     # tweak5      — pointer to 5 FEs: [pk_seed | adrs0]
     # adrs1       — scalar
+    # adrs2       — scalar (FORS (tree_height, tree_index) Merkle coordinate; 0 if unused)
     # right_block — pointer to DIGEST_LEN (8) contiguous FEs (the full Poseidon right input)
     # out         — pointer to HALF_DIGEST_LEN (4) FEs
     left = Array(DIGEST_LEN)
     copy_5(tweak5, left)
     left[5] = adrs1
-    left[6] = 0
+    left[6] = adrs2
     left[7] = 0
     poseidon16_compress_half(left, right_block, out)
     return
@@ -181,18 +158,20 @@ def sibling_half_offset(b):
 
 
 @inline
-def do_5_merkle_block_fors_const(k, tweak5, tree_ht_start, adrs1_ptr, rem_ptr, leaf_index, state_in, state_out):
+def do_5_merkle_block_fors_const(k, tweak5, idx_leaf, tree_ht_start, adrs2_ptr, rem_ptr, leaf_index, state_in, state_out):
     # Advance MERKLE_LEVEL_STEP (5) levels of a FORS Merkle tree with copy-free right-half
     # assembly, hinting each sibling from the "fors_auth" queue. k, tree_ht_start are
-    # compile-time; adrs1_ptr, rem_ptr, leaf_index are runtime. k selects the direction at each
-    # level (bit i of k).
+    # compile-time; idx_leaf, adrs2_ptr, rem_ptr, leaf_index are runtime. k selects the
+    # direction at each level (bit i of k).
     #
     # tweak5 — pointer to 5 FEs [pk_seed | FORS_ADRS0], built once per FORS tree by the caller
     # (constant across all levels of the tree, so it is hoisted out of this helper).
+    # idx_leaf — hypertree key_pair_address, constant per FORS verification, passed as adrs1.
     #
-    # adrs1 for each level is provided by hint_fors_node_adrs and range-checked here:
-    #   adrs1_ptr[h] = (leaf_index >> H) | (H << ADRS1_TREE_HT_SHIFT); rem_ptr[h] = leaf_index % 2^H
-    # Constraint: leaf_index == (adrs1_ptr[h] - H * 2^ADRS1_TREE_HT_SHIFT) * 2^H + rem_ptr[h].
+    # adrs2 for each level is the (tree_height, tree_index) Merkle coordinate, provided by
+    # hint_fors_node_adrs and range-checked here:
+    #   adrs2_ptr[h] = (leaf_index >> H) | (H << ADRS1_TREE_HT_SHIFT); rem_ptr[h] = leaf_index % 2^H
+    # Constraint: leaf_index == (adrs2_ptr[h] - H * 2^ADRS1_TREE_HT_SHIFT) * 2^H + rem_ptr[h].
     #
     # Per level i, the 8-FE Poseidon right input lives in blocks[i*DIGEST_LEN ..]. The running
     # state occupies the low half if bit b_i == 0 (state on the left) or the high half if b_i == 1
@@ -202,8 +181,6 @@ def do_5_merkle_block_fors_const(k, tweak5, tree_ht_start, adrs1_ptr, rem_ptr, l
     #
     # The levels are written out explicitly (rather than looped) because the hint_witness label
     # must be a string literal and the direction bits are distinct compile-time values.
-    # NOTE: structurally identical to do_5_merkle_block_ht_const except the "fors_auth" hint label;
-    # kept separate because hint_witness needs a string literal.
     b0 = k % 2
     b0r = (k - b0) / 2
     b1 = b0r % 2
@@ -224,34 +201,34 @@ def do_5_merkle_block_fors_const(k, tweak5, tree_ht_start, adrs1_ptr, rem_ptr, l
     # Level 0: state placed from state_in; output into level 1's state half.
     copy_4(state_in, block0 + state_half_offset(b0))
     hint_witness("fors_auth", block0 + sibling_half_offset(b0))
-    _merkle_level_assert(adrs1_ptr[0], rem_ptr[0], tree_ht_start + 1, leaf_index)
-    adrs_compress_pair_t5_block(tweak5, adrs1_ptr[0], block0, block1 + state_half_offset(b1))
+    _merkle_level_assert(adrs2_ptr[0], rem_ptr[0], tree_ht_start + 1, leaf_index)
+    adrs_compress_pair_t5_block(tweak5, idx_leaf, adrs2_ptr[0], block0, block1 + state_half_offset(b1))
 
     # Level 1
     hint_witness("fors_auth", block1 + sibling_half_offset(b1))
-    _merkle_level_assert(adrs1_ptr[1], rem_ptr[1], tree_ht_start + 2, leaf_index)
-    adrs_compress_pair_t5_block(tweak5, adrs1_ptr[1], block1, block2 + state_half_offset(b2))
+    _merkle_level_assert(adrs2_ptr[1], rem_ptr[1], tree_ht_start + 2, leaf_index)
+    adrs_compress_pair_t5_block(tweak5, idx_leaf, adrs2_ptr[1], block1, block2 + state_half_offset(b2))
 
     # Level 2
     hint_witness("fors_auth", block2 + sibling_half_offset(b2))
-    _merkle_level_assert(adrs1_ptr[2], rem_ptr[2], tree_ht_start + 3, leaf_index)
-    adrs_compress_pair_t5_block(tweak5, adrs1_ptr[2], block2, block3 + state_half_offset(b3))
+    _merkle_level_assert(adrs2_ptr[2], rem_ptr[2], tree_ht_start + 3, leaf_index)
+    adrs_compress_pair_t5_block(tweak5, idx_leaf, adrs2_ptr[2], block2, block3 + state_half_offset(b3))
 
     # Level 3
     hint_witness("fors_auth", block3 + sibling_half_offset(b3))
-    _merkle_level_assert(adrs1_ptr[3], rem_ptr[3], tree_ht_start + 4, leaf_index)
-    adrs_compress_pair_t5_block(tweak5, adrs1_ptr[3], block3, block4 + state_half_offset(b4))
+    _merkle_level_assert(adrs2_ptr[3], rem_ptr[3], tree_ht_start + 4, leaf_index)
+    adrs_compress_pair_t5_block(tweak5, idx_leaf, adrs2_ptr[3], block3, block4 + state_half_offset(b4))
 
     # Level 4: output into state_out.
     hint_witness("fors_auth", block4 + sibling_half_offset(b4))
-    _merkle_level_assert(adrs1_ptr[4], rem_ptr[4], tree_ht_start + 5, leaf_index)
-    adrs_compress_pair_t5_block(tweak5, adrs1_ptr[4], block4, state_out)
+    _merkle_level_assert(adrs2_ptr[4], rem_ptr[4], tree_ht_start + 5, leaf_index)
+    adrs_compress_pair_t5_block(tweak5, idx_leaf, adrs2_ptr[4], block4, state_out)
     return
 
 
 @inline
-def do_5_fors_merkle_level(k, tweak5, tree_ht_start, adrs1_ptr, rem_ptr, leaf_index, state_in, state_out):
-    match_range(k, range(0, 2**MERKLE_LEVEL_STEP), lambda k_prime: do_5_merkle_block_fors_const(k_prime, tweak5, tree_ht_start, adrs1_ptr, rem_ptr, leaf_index, state_in, state_out))
+def do_5_fors_merkle_level(k, tweak5, idx_leaf, tree_ht_start, adrs2_ptr, rem_ptr, leaf_index, state_in, state_out):
+    match_range(k, range(0, 2**MERKLE_LEVEL_STEP), lambda k_prime: do_5_merkle_block_fors_const(k_prime, tweak5, idx_leaf, tree_ht_start, adrs2_ptr, rem_ptr, leaf_index, state_in, state_out))
     return
 
 
@@ -291,27 +268,27 @@ def do_5_merkle_block_ht_const(k, tweak5, tree_ht_start, adrs1_ptr, rem_ptr, lea
     copy_4(state_in, block0 + state_half_offset(b0))
     hint_witness("ht_auth", block0 + sibling_half_offset(b0))
     _merkle_level_assert(adrs1_ptr[0], rem_ptr[0], tree_ht_start + 1, leaf_index)
-    adrs_compress_pair_t5_block(tweak5, adrs1_ptr[0], block0, block1 + state_half_offset(b1))
+    adrs_compress_pair_t5_block(tweak5, adrs1_ptr[0], 0, block0, block1 + state_half_offset(b1))
 
     # Level 1
     hint_witness("ht_auth", block1 + sibling_half_offset(b1))
     _merkle_level_assert(adrs1_ptr[1], rem_ptr[1], tree_ht_start + 2, leaf_index)
-    adrs_compress_pair_t5_block(tweak5, adrs1_ptr[1], block1, block2 + state_half_offset(b2))
+    adrs_compress_pair_t5_block(tweak5, adrs1_ptr[1], 0, block1, block2 + state_half_offset(b2))
 
     # Level 2
     hint_witness("ht_auth", block2 + sibling_half_offset(b2))
     _merkle_level_assert(adrs1_ptr[2], rem_ptr[2], tree_ht_start + 3, leaf_index)
-    adrs_compress_pair_t5_block(tweak5, adrs1_ptr[2], block2, block3 + state_half_offset(b3))
+    adrs_compress_pair_t5_block(tweak5, adrs1_ptr[2], 0, block2, block3 + state_half_offset(b3))
 
     # Level 3
     hint_witness("ht_auth", block3 + sibling_half_offset(b3))
     _merkle_level_assert(adrs1_ptr[3], rem_ptr[3], tree_ht_start + 4, leaf_index)
-    adrs_compress_pair_t5_block(tweak5, adrs1_ptr[3], block3, block4 + state_half_offset(b4))
+    adrs_compress_pair_t5_block(tweak5, adrs1_ptr[3], 0, block3, block4 + state_half_offset(b4))
 
     # Level 4
     hint_witness("ht_auth", block4 + sibling_half_offset(b4))
     _merkle_level_assert(adrs1_ptr[4], rem_ptr[4], tree_ht_start + 5, leaf_index)
-    adrs_compress_pair_t5_block(tweak5, adrs1_ptr[4], block4, state_out)
+    adrs_compress_pair_t5_block(tweak5, adrs1_ptr[4], 0, block4, state_out)
     return
 
 
@@ -389,22 +366,24 @@ def fold_wots_pubkey(pk_seed, adrs0, adrs1, buf, out):
 
 
 @inline
-def fold_roots(pk_seed, buf, out):
+def fold_roots(pk_seed, idx_tree, idx_leaf, buf, out):
     # Fold SPX_FORS_TREES (9) FORS tree roots into the FORS public key digest.
     # Matches fors.rs::fold_roots — T-Sponge with replacement (see notes above):
-    #   adrs0 = pack(layer=0, type=FORS_ROOTS, tree_addr=0)  — fixed IV tweak
-    #   adrs1 = 0                                             — no per-step domain separation
+    #   adrs0 = pack(layer=0, type=FORS_ROOTS, tree_addr=idx_tree)  — fixed IV tweak
+    #   adrs1 = idx_leaf (hypertree key_pair_address)               — binds the fold to the leaf
     # SPX_FORS_TREES (9) is odd, so the buffer holds 10 tips with the 10th zero-padded; the final
     # absorb block is [root8 | 0,0,0,0]. Costs ceil(9/2) = 5 poseidon calls.
     #
     # Inputs:
-    #   pk_seed — pointer to HALF_DIGEST_LEN (4) FEs: per-signer public seed
-    #   buf     — contiguous tip buffer of fold_tips_len(SPX_FORS_TREES + 1) FE, with the 9 roots
-    #             pre-placed in tip order and the trailing pad-tip zeroed by the producer
+    #   pk_seed  — pointer to HALF_DIGEST_LEN (4) FEs: per-signer public seed
+    #   idx_tree — hypertree subtree address (FORS_ROOTS adrs0 tree_address)
+    #   idx_leaf — hypertree leaf address (FORS_ROOTS adrs1 key_pair_address)
+    #   buf      — contiguous tip buffer of fold_tips_len(SPX_FORS_TREES + 1) FE, with the 9 roots
+    #              pre-placed in tip order and the trailing pad-tip zeroed by the producer
     # Output:
     #   out     — HALF_DIGEST_LEN (4) FEs: FORS public key hash
-    FORS_ROOTS_ADRS0 = ADRS_FORS_ROOTS * (2 ** ADRS0_TYPE_SHIFT)  # layer=0, type=4, tree_addr=0 → 16
+    FORS_ROOTS_ADRS0 = ADRS_FORS_ROOTS * (2 ** ADRS0_TYPE_SHIFT) + idx_tree * (2 ** ADRS0_TREE_SHIFT)
 
     tweak5 = make_tweak5(pk_seed, FORS_ROOTS_ADRS0)
-    _fold_tips_sponge(tweak5, 0, buf, (SPX_FORS_TREES + 1) / 2, out)
+    _fold_tips_sponge(tweak5, idx_leaf, buf, (SPX_FORS_TREES + 1) / 2, out)
     return

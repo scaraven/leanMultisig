@@ -21,14 +21,14 @@ def _iterate_hash_const_tweaked(input, k, tweak5, adrs1_start, output):
         copy_4(input, output)
     elif k == 1:
         # Single step: full 8-FE input → 4-FE output (out4 truncating compress).
-        adrs_compress_pair_t5_block(tweak5, adrs1_start, input, output)
+        adrs_compress_pair_t5_block(tweak5, adrs1_start, 0, input, output)
     else:
         # First k-1 steps keep full 8-FE state (out8); the last step truncates to 4-FE.
         states = Array((k - 1) * DIGEST_LEN)
         adrs_compress_pair_t5_block_out8(tweak5, adrs1_start, input, states)
         for j in unroll(1, k - 1):
             adrs_compress_pair_t5_block_out8(tweak5, adrs1_start + j * (2 ** ADRS1_HASH_SHIFT), states + (j - 1) * DIGEST_LEN, states + j * DIGEST_LEN)
-        adrs_compress_pair_t5_block(tweak5, adrs1_start + (k - 1) * (2 ** ADRS1_HASH_SHIFT), states + (k - 2) * DIGEST_LEN, output)
+        adrs_compress_pair_t5_block(tweak5, adrs1_start + (k - 1) * (2 ** ADRS1_HASH_SHIFT), 0, states + (k - 2) * DIGEST_LEN, output)
     return
 
 

@@ -20,7 +20,7 @@ use crate::{
 //   3. Verifier recomputes each tree root from (leaf, auth path) and folds
 //      the k roots into a single FORS public key via sequential hash.
 //
-// Secret values are derived via PRF: prf(pk_seed, sk_seed, Adrs::fors_prf(tree, 0, leaf)).
+// Secret values are derived via PRF: prf(pk_seed, sk_seed, Adrs::fors_prf(idx_tree, idx_leaf, tree, leaf)).
 // Leaf hashing and Merkle nodes use Adrs::fors_tree with the uniform tweak layout.
 // Root folding uses Adrs::fors_roots.
 
@@ -28,6 +28,9 @@ use crate::{
 pub struct ForsSecretKey {
     sk_seed: HalfDigest,
     pk_seed: HalfDigest,
+    /// Hypertree leaf position this FORS keypair is bound to (from the message digest).
+    idx_tree: usize,
+    idx_leaf: usize,
     /// Materialised tree nodes: [tree][level][node]
     /// level 0 = leaf hashes, level SPX_FORS_HEIGHT = root
     nodes: Vec<Vec<Vec<HalfDigest>>>,
@@ -52,39 +55,70 @@ pub struct ForsTreeSig {
 }
 
 /// Derive the FORS leaf secret for (tree_index, leaf_index) from key material.
-fn derive_leaf_secret(sk_seed: HalfDigest, pk_seed: HalfDigest, tree_index: usize, leaf_index: usize) -> HalfDigest {
-    let adrs = Adrs::fors_prf(tree_index as u32, 0, leaf_index as u32);
+/// `idx_tree`/`idx_leaf` bind the secret to the hypertree leaf position being signed.
+fn derive_leaf_secret(
+    sk_seed: HalfDigest,
+    pk_seed: HalfDigest,
+    idx_tree: usize,
+    idx_leaf: usize,
+    tree_index: usize,
+    leaf_index: usize,
+) -> HalfDigest {
+    let adrs = Adrs::fors_prf(idx_tree as u32, idx_leaf as u32, tree_index as u32, leaf_index as u32);
     prf(pk_seed, sk_seed, adrs)
 }
 
 /// Hash a leaf secret into the level-0 tree node, tweaked with Adrs::fors_tree(height=0).
-pub fn hash_leaf(secret: HalfDigest, pk_seed: HalfDigest, tree_index: usize, leaf_index: usize) -> HalfDigest {
-    let adrs = Adrs::fors_tree(tree_index as u32, 0, leaf_index as u32);
+pub fn hash_leaf(
+    secret: HalfDigest,
+    pk_seed: HalfDigest,
+    idx_tree: usize,
+    idx_leaf: usize,
+    tree_index: usize,
+    leaf_index: usize,
+) -> HalfDigest {
+    let adrs = Adrs::fors_tree(
+        idx_tree as u32,
+        idx_leaf as u32,
+        tree_index as u32,
+        0,
+        leaf_index as u32,
+    );
     let mut left = [F::ZERO; DIGEST_SIZE];
     left[..4].copy_from_slice(&pk_seed);
     left[4] = adrs.adrs0;
     left[5] = adrs.adrs1;
+    left[6] = adrs.adrs2;
     truncate_half(poseidon16_compress_pair(&left, &half_to_full(secret)))
 }
 
 /// Hash two sibling nodes at (tree_index, height, node_index) into their parent.
 ///
 /// Tweak layout:
-///   left  = [pk_seed[0..4] | adrs0, adrs1, 0, 0]
+///   left  = [pk_seed[0..4] | adrs0, adrs1, adrs2, 0]
 ///   right = [left_child[0..4] | right_child[0..4]]
 fn hash_merkle_node(
     left_child: HalfDigest,
     right_child: HalfDigest,
     pk_seed: HalfDigest,
+    idx_tree: usize,
+    idx_leaf: usize,
     tree_index: usize,
     height: usize,
     node_index: usize,
 ) -> HalfDigest {
-    let adrs = Adrs::fors_tree(tree_index as u32, height as u32, node_index as u32);
+    let adrs = Adrs::fors_tree(
+        idx_tree as u32,
+        idx_leaf as u32,
+        tree_index as u32,
+        height as u32,
+        node_index as u32,
+    );
     let mut left = [F::ZERO; DIGEST_SIZE];
     left[..4].copy_from_slice(&pk_seed);
     left[4] = adrs.adrs0;
     left[5] = adrs.adrs1;
+    left[6] = adrs.adrs2;
     let mut right = [F::ZERO; DIGEST_SIZE];
     right[..4].copy_from_slice(&left_child);
     right[4..8].copy_from_slice(&right_child);
@@ -92,7 +126,16 @@ fn hash_merkle_node(
 }
 
 /// Generate the full FORS keypair, materialising all leaf secrets and tree nodes.
-pub fn fors_key_gen(sk_seed: HalfDigest, pk_seed: HalfDigest) -> (ForsSecretKey, ForsPublicKey) {
+///
+/// `idx_tree`/`idx_leaf` are the hypertree position (idx_tree / idx_leaf from the message
+/// digest) being signed. The FORS keypair is bound to this position, so it is unique per
+/// signature and must NOT be cached or reused across signatures.
+pub fn fors_key_gen(
+    sk_seed: HalfDigest,
+    pk_seed: HalfDigest,
+    idx_tree: usize,
+    idx_leaf: usize,
+) -> (ForsSecretKey, ForsPublicKey) {
     let num_leaves = 1usize << SPX_FORS_HEIGHT;
 
     let all_nodes: Vec<_> = (0..SPX_FORS_TREES)
@@ -102,8 +145,8 @@ pub fn fors_key_gen(sk_seed: HalfDigest, pk_seed: HalfDigest) -> (ForsSecretKey,
             let leaf_hashes: Vec<HalfDigest> = (0..num_leaves)
                 .into_par_iter()
                 .map(|l| {
-                    let secret = derive_leaf_secret(sk_seed, pk_seed, t, l);
-                    hash_leaf(secret, pk_seed, t, l)
+                    let secret = derive_leaf_secret(sk_seed, pk_seed, idx_tree, idx_leaf, t, l);
+                    hash_leaf(secret, pk_seed, idx_tree, idx_leaf, t, l)
                 })
                 .collect();
 
@@ -114,7 +157,9 @@ pub fn fors_key_gen(sk_seed: HalfDigest, pk_seed: HalfDigest) -> (ForsSecretKey,
                 let next: Vec<HalfDigest> = prev
                     .par_chunks_exact(2)
                     .enumerate()
-                    .map(|(node_idx, pair)| hash_merkle_node(pair[0], pair[1], pk_seed, t, h + 1, node_idx))
+                    .map(|(node_idx, pair)| {
+                        hash_merkle_node(pair[0], pair[1], pk_seed, idx_tree, idx_leaf, t, h + 1, node_idx)
+                    })
                     .collect();
                 levels.push(next);
             }
@@ -122,40 +167,49 @@ pub fn fors_key_gen(sk_seed: HalfDigest, pk_seed: HalfDigest) -> (ForsSecretKey,
         })
         .collect();
 
-    let pk = fors_public_key_from_nodes(&all_nodes, pk_seed);
+    let pk = fors_public_key_from_nodes(&all_nodes, pk_seed, idx_tree, idx_leaf);
     let sk = ForsSecretKey {
         sk_seed,
         pk_seed,
+        idx_tree,
+        idx_leaf,
         nodes: all_nodes,
         root: pk.0,
     };
     (sk, pk)
 }
 
-fn fors_public_key_from_nodes(nodes: &[Vec<Vec<HalfDigest>>], pk_seed: HalfDigest) -> ForsPublicKey {
+fn fors_public_key_from_nodes(
+    nodes: &[Vec<Vec<HalfDigest>>],
+    pk_seed: HalfDigest,
+    idx_tree: usize,
+    idx_leaf: usize,
+) -> ForsPublicKey {
     let roots: Vec<HalfDigest> = nodes.iter().map(|levels| levels[SPX_FORS_HEIGHT][0]).collect();
-    ForsPublicKey(fold_roots(pk_seed, &roots))
+    ForsPublicKey(fold_roots(pk_seed, &roots, idx_tree, idx_leaf))
 }
 
 /// Fold k roots into a single half-digest using a T-Sponge with replacement.
 ///
 /// Poseidon-16 in compression mode is used as a sponge (capacity 8 / rate 8): each compression
 /// absorbs a full 8-FE block of *two* roots by overwriting the rate, while the running
-/// accumulator lives in the capacity. The fixed sponge tweak is `Adrs::fors_roots(0, 0)`, fed
-/// directly as the first compression's left input (no priming call, and no per-step adrs1):
-///   IV    = [pk_seed[0..4] | adrs0, adrs1, 0, 0]
+/// accumulator lives in the capacity. The sponge tweak `Adrs::fors_roots(idx_tree, idx_leaf, 0)`
+/// binds the fold to the hypertree leaf position and is fed directly as the first compression's
+/// left input (no priming call):
+///   IV    = [pk_seed[0..4] | adrs0, adrs1, adrs2, 0]
 ///   block = [root_{2i}[0..4] | root_{2i+1}[0..4]]
 ///   state = P16(state, block)
 /// The 8-FE Poseidon output is carried in full between calls; only the final squeeze truncates
 /// to a HalfDigest. When the root count is odd the final block's high half is zero-padded.
-pub fn fold_roots(pk_seed: HalfDigest, roots: &[HalfDigest]) -> HalfDigest {
+pub fn fold_roots(pk_seed: HalfDigest, roots: &[HalfDigest], idx_tree: usize, idx_leaf: usize) -> HalfDigest {
     assert!(roots.len() >= 2, "fold_roots requires at least 2 roots");
 
-    let adrs = Adrs::fors_roots(0, 0);
+    let adrs = Adrs::fors_roots(idx_tree as u32, idx_leaf as u32, 0);
     let mut iv = [F::ZERO; DIGEST_SIZE];
     iv[..4].copy_from_slice(&pk_seed);
     iv[4] = adrs.adrs0;
     iv[5] = adrs.adrs1;
+    iv[6] = adrs.adrs2;
 
     let mut block = [F::ZERO; DIGEST_SIZE];
     block[..4].copy_from_slice(&roots[0]);
@@ -185,7 +239,7 @@ pub fn fors_sign_single_tree(sk: &ForsSecretKey, tree_index: usize, leaf_index: 
     assert!(leaf_index < (1 << SPX_FORS_HEIGHT), "Leaf index out of bounds");
 
     // Reveal the raw leaf secret (not the hashed node).
-    let leaf_secret = derive_leaf_secret(sk.sk_seed, sk.pk_seed, tree_index, leaf_index);
+    let leaf_secret = derive_leaf_secret(sk.sk_seed, sk.pk_seed, sk.idx_tree, sk.idx_leaf, tree_index, leaf_index);
 
     let auth_path: Vec<HalfDigest> = (0..SPX_FORS_HEIGHT)
         .map(|level| {
@@ -213,6 +267,8 @@ pub fn fors_verify(
     sig: &ForsSignature,
     indices: &[usize; SPX_FORS_TREES],
     pk_seed: HalfDigest,
+    idx_tree: usize,
+    idx_leaf: usize,
 ) -> Result<ForsPublicKey, ForsVerifyError> {
     let mut roots = [HalfDigest::default(); SPX_FORS_TREES];
     for (t, (tree_sig, &leaf_idx)) in sig.trees.iter().zip(indices.iter()).enumerate() {
@@ -225,23 +281,23 @@ pub fn fors_verify(
         }
 
         // Recompute level-0 node from the revealed secret.
-        let mut current = hash_leaf(tree_sig.leaf_secret, pk_seed, t, leaf_idx);
+        let mut current = hash_leaf(tree_sig.leaf_secret, pk_seed, idx_tree, idx_leaf, t, leaf_idx);
 
         // Walk up the tree using the auth path.
         for (level, sibling) in tree_sig.auth_path.iter().enumerate() {
             let is_left = ((leaf_idx >> level) & 1) == 0;
             let node_idx = (leaf_idx >> level) >> 1; // parent node index at level+1
             current = if is_left {
-                hash_merkle_node(current, *sibling, pk_seed, t, level + 1, node_idx)
+                hash_merkle_node(current, *sibling, pk_seed, idx_tree, idx_leaf, t, level + 1, node_idx)
             } else {
-                hash_merkle_node(*sibling, current, pk_seed, t, level + 1, node_idx)
+                hash_merkle_node(*sibling, current, pk_seed, idx_tree, idx_leaf, t, level + 1, node_idx)
             };
         }
 
         roots[t] = current;
     }
 
-    Ok(ForsPublicKey(fold_roots(pk_seed, &roots)))
+    Ok(ForsPublicKey(fold_roots(pk_seed, &roots, idx_tree, idx_leaf)))
 }
 
 impl ForsSecretKey {
@@ -356,18 +412,44 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
-    fn test_fors_sign_verify_roundtrip_ignored() {
+    fn test_fors_sign_verify_roundtrip() {
         let sk_seed = [F::new(7); 4];
         let pk_seed = [F::new(11); 4];
-        let (sk, pk) = fors_key_gen(sk_seed, pk_seed);
+        let (idx_tree, idx_leaf) = (0x1234, 0x5);
+        let (sk, pk) = fors_key_gen(sk_seed, pk_seed, idx_tree, idx_leaf);
 
         let mhash = [0x11u8; SPX_FORS_MSG_BYTES];
         let indices = extract_fors_indices(&mhash);
         let sig = fors_sign(&sk, &indices);
-        let recovered_pk = fors_verify(&sig, &indices, pk_seed).expect("valid signature");
+        let recovered_pk = fors_verify(&sig, &indices, pk_seed, idx_tree, idx_leaf).expect("valid signature");
 
         assert_eq!(pk, recovered_pk);
+    }
+
+    /// Regression: FORS keys MUST depend on the hypertree leaf position. Two distinct
+    /// positions (idx_tree, idx_leaf) over the same key material must yield different keys.
+    #[test]
+    fn test_fors_key_is_position_dependent() {
+        let sk_seed = [F::new(7); 4];
+        let pk_seed = [F::new(11); 4];
+
+        let (_, pk_a) = fors_key_gen(sk_seed, pk_seed, 0x1234, 0x5);
+        let (_, pk_b) = fors_key_gen(sk_seed, pk_seed, 0x1235, 0x5); // different idx_tree
+        let (_, pk_c) = fors_key_gen(sk_seed, pk_seed, 0x1234, 0x6); // different idx_leaf
+
+        assert_ne!(pk_a, pk_b, "FORS pk must change with idx_tree");
+        assert_ne!(pk_a, pk_c, "FORS pk must change with idx_leaf");
+
+        // A signature under one position must NOT verify against a different position.
+        let mhash = [0x11u8; SPX_FORS_MSG_BYTES];
+        let indices = extract_fors_indices(&mhash);
+        let (sk_a, _) = fors_key_gen(sk_seed, pk_seed, 0x1234, 0x5);
+        let sig = fors_sign(&sk_a, &indices);
+        let recovered = fors_verify(&sig, &indices, pk_seed, 0x1235, 0x5).expect("structurally valid");
+        assert_ne!(
+            pk_a, recovered,
+            "sig must not recover the same pk under a different position"
+        );
     }
 
     #[test]

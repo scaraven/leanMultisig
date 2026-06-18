@@ -4,8 +4,8 @@ use lean_vm::*;
 use rand::{RngExt, SeedableRng, rngs::StdRng};
 use rec_aggregation::{PREAMBLE_MEMORY_LEN, compilation::build_replacements, sphincs::split_leaf_upper};
 use sphincs::{
-    Digest, HALF_DIGEST_SIZE, HalfDigest, SPX_D, SPX_FORS_HEIGHT, SPX_FORS_TREES, SPX_TREE_HEIGHT, SPX_WOTS_LEN,
-    SPX_WOTS_W,
+    Digest, HALF_DIGEST_SIZE, HalfDigest, SPX_D, SPX_FORS_HEIGHT, SPX_FORS_TREES, SPX_TREE_BITS, SPX_TREE_HEIGHT,
+    SPX_WOTS_LEN, SPX_WOTS_W,
     address::Adrs,
     core::prf,
     fold_roots, fors_auth_buffers, fors_key_gen, fors_leaf_secrets_to_flat, fors_sign, fors_sign_single_tree,
@@ -43,10 +43,14 @@ fn test_fold_roots_sphincs() {
         // fold_roots takes a pk_seed tweak and a slice of HalfDigests (4 FEs each)
         let pk_seed: HalfDigest = rng.random();
         let data: [HalfDigest; SPX_FORS_TREES] = std::array::from_fn(|_| rng.random());
-        let hash = fold_roots(pk_seed, &data);
+        let idx_tree: usize = rng.random_range(..(1 << SPX_TREE_BITS));
+        let idx_leaf: usize = rng.random_range(..(1 << SPX_TREE_HEIGHT));
+        let hash = fold_roots(pk_seed, &data, idx_tree, idx_leaf);
         let roots_flat: Vec<F> = data.iter().flatten().copied().collect();
         let hints = HashMap::from([
             ("pk_seed".to_string(), vec![pk_seed.to_vec()]),
+            ("idx_tree".to_string(), vec![vec![F::from_usize(idx_tree)]]),
+            ("idx_leaf".to_string(), vec![vec![F::from_usize(idx_leaf)]]),
             ("roots".to_string(), vec![roots_flat]),
             ("expected".to_string(), vec![hash.to_vec()]),
         ]);
@@ -295,7 +299,9 @@ fn test_sphincs_fors_merkle_verify() {
         let sk_seed: HalfDigest = rng.random();
         let pk_seed: HalfDigest = rng.random();
 
-        let (fors_sk, _) = fors_key_gen(sk_seed, pk_seed);
+        let idx_tree: usize = rng.random_range(..(1 << SPX_TREE_BITS));
+        let idx_leaf: usize = rng.random_range(..(1 << SPX_TREE_HEIGHT));
+        let (fors_sk, _) = fors_key_gen(sk_seed, pk_seed, idx_tree, idx_leaf);
         let leaf_index: usize = rng.random_range(..(1 << SPX_FORS_HEIGHT));
         let tree: usize = rng.random_range(..SPX_FORS_TREES);
         let root = fors_sk.tree_pubkey(tree);
@@ -304,6 +310,8 @@ fn test_sphincs_fors_merkle_verify() {
 
         let hints = HashMap::from([
             ("pk_seed".to_string(), vec![pk_seed.to_vec()]),
+            ("idx_tree".to_string(), vec![vec![F::from_usize(idx_tree)]]),
+            ("idx_leaf".to_string(), vec![vec![F::from_usize(idx_leaf)]]),
             ("tree_index".to_string(), vec![vec![F::from_usize(tree)]]),
             ("leaf_index".to_string(), vec![vec![F::from_usize(leaf_index)]]),
             ("leaf_secret".to_string(), vec![sig.leaf_secret.to_vec()]),
@@ -332,7 +340,9 @@ fn test_sphincs_fors_verify() {
         let sk_seed: HalfDigest = rng.random();
         let pk_seed: HalfDigest = rng.random();
 
-        let (fors_sk, fors_pk) = fors_key_gen(sk_seed, pk_seed);
+        let idx_tree: usize = rng.random_range(..(1 << SPX_TREE_BITS));
+        let idx_leaf: usize = rng.random_range(..(1 << SPX_TREE_HEIGHT));
+        let (fors_sk, fors_pk) = fors_key_gen(sk_seed, pk_seed, idx_tree, idx_leaf);
         let leaf_indices: [usize; SPX_FORS_TREES] = std::array::from_fn(|_| rng.random_range(..(1 << SPX_FORS_HEIGHT)));
         let root = fors_pk.0;
 
@@ -342,6 +352,8 @@ fn test_sphincs_fors_verify() {
 
         let hints = HashMap::from([
             ("pk_seed".to_string(), vec![pk_seed.to_vec()]),
+            ("idx_tree".to_string(), vec![vec![F::from_usize(idx_tree)]]),
+            ("idx_leaf".to_string(), vec![vec![F::from_usize(idx_leaf)]]),
             (
                 "leaf_index".to_string(),
                 vec![leaf_indices.iter().map(|&idx| F::from_usize(idx)).collect()],
@@ -363,6 +375,8 @@ fn test_sphincs_fors_verify() {
         let root_wrong: HalfDigest = rng.random();
         let hints_wrong = HashMap::from([
             ("pk_seed".to_string(), vec![pk_seed.to_vec()]),
+            ("idx_tree".to_string(), vec![vec![F::from_usize(idx_tree)]]),
+            ("idx_leaf".to_string(), vec![vec![F::from_usize(idx_leaf)]]),
             (
                 "leaf_index".to_string(),
                 vec![leaf_indices.iter().map(|&idx| F::from_usize(idx)).collect()],

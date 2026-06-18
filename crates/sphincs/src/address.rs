@@ -1,5 +1,6 @@
 use crate::{
-    F, SPX_CHAIN_ADDR_BITS, SPX_D, SPX_FORS_HEIGHT, SPX_KP_ADDR_BITS, SPX_TREE_BITS, SPX_WOTS_LEN, SPX_WOTS_W,
+    F, SPX_CHAIN_ADDR_BITS, SPX_D, SPX_FORS_HEIGHT, SPX_FORS_TREES, SPX_KP_ADDR_BITS, SPX_TREE_BITS, SPX_WOTS_LEN,
+    SPX_WOTS_W,
 };
 use backend::PrimeField32;
 
@@ -27,6 +28,12 @@ const MAX_TREE_HT: u32 = SPX_FORS_HEIGHT as u32;
 // Bit offsets within adrs0
 const ADRS0_TYPE_SHIFT: u32 = 2;
 const ADRS0_TREE_SHIFT: u32 = 2 + 3; // layer(2) + type(3)
+// FORS-internal tree number (0..SPX_FORS_TREES-1) packed into adrs0's high bits, above
+// tree_address. layer(2)+type(3)+tree_addr(22) = 27 bits, so fors_tree starts at bit 27.
+// Max packed value (fors_tree=8, tree_addr=2^22-1) ≈ 0x47FF_FFFF < KoalaBear prime
+// (0x7F00_0001), so this never wraps the field.
+const ADRS0_FORS_TREE_SHIFT: u32 = 2 + 3 + SPX_TREE_BITS as u32; // = 27
+const MAX_FORS_TREE: u32 = (SPX_FORS_TREES - 1) as u32;
 
 // Bit offsets within adrs1 — WOTS / FORS_ROOTS layout
 const ADRS1_CHAIN_SHIFT: u32 = SPX_KP_ADDR_BITS as u32;
@@ -35,20 +42,26 @@ const ADRS1_HASH_SHIFT: u32 = SPX_KP_ADDR_BITS as u32 + SPX_CHAIN_ADDR_BITS as u
 // Bit offsets within adrs1 — TREE / FORS_TREE layout
 const ADRS1_TREE_HT_SHIFT: u32 = SPX_FORS_HEIGHT as u32;
 
-/// Two-field-element condensed ADRS for SPHINCS+ with our concrete parameters.
+/// Three-field-element condensed ADRS for SPHINCS+ with our concrete parameters.
 ///
 /// adrs0 bit layout (bits 0–30):
 ///   bits  1.. 0 : layer        (2 bits, values 0–SPX_D-1)
 ///   bits  4.. 2 : type         (3 bits, values 0–6)
-///   bits 26.. 5 : tree_address (SPX_TREE_BITS = 22 bits)
-///   bits 30..27 : (unused)
+///   bits 26.. 5 : tree_address (SPX_TREE_BITS = 22 bits) — hypertree subtree (idx_tree)
+///   bits 30..27 : fors_tree    (4 bits, 0–SPX_FORS_TREES-1) [FORS_TREE / FORS_PRF only]
 ///
 /// adrs1 bit layout — WOTS_HASH / WOTS_PRF / WOTS_PK / FORS_ROOTS:
 ///   bits SPX_KP_ADDR_BITS-1..0        : key_pair_address (22 bits)
 ///   bits +SPX_CHAIN_ADDR_BITS-1..     : chain_address    (5 bits)  [WOTS only]
 ///   bits +SPX_HASH_ADDR_BITS-1..      : hash_address     (4 bits)  [WOTS_HASH only]
 ///
-/// adrs1 bit layout — TREE / FORS_TREE:
+/// adrs1 bit layout — TREE: (tree_height, tree_index) Merkle coordinate (TREE keeps the
+///   coordinate in adrs1; adrs2 is unused).
+///
+/// adrs1 — FORS_TREE / FORS_PRF: holds key_pair_address = hypertree leaf (idx_leaf, 11 bits).
+///
+/// adrs2 bit layout — FORS_TREE only (zero for all other types): the (tree_height, tree_index)
+///   Merkle coordinate, displaced here because adrs1 holds idx_leaf for FORS.
 ///   bits SPX_FORS_HEIGHT-1..0         : tree_index  (SPX_FORS_HEIGHT = 15 bits)
 ///   bits SPX_FORS_HEIGHT+3..SPX_FORS_HEIGHT : tree_height (4 bits)
 ///   bits 30..SPX_FORS_HEIGHT+4        : (unused)
@@ -56,6 +69,7 @@ const ADRS1_TREE_HT_SHIFT: u32 = SPX_FORS_HEIGHT as u32;
 pub struct Adrs {
     pub adrs0: F,
     pub adrs1: F,
+    pub adrs2: F,
 }
 
 fn pack_adrs0(layer: u32, adrs_type: u32, tree_address: u32) -> F {
@@ -63,6 +77,15 @@ fn pack_adrs0(layer: u32, adrs_type: u32, tree_address: u32) -> F {
     debug_assert!(adrs_type <= MAX_TYPE, "type out of range");
     debug_assert!(tree_address <= MAX_TREE, "tree_address out of range");
     F::new(layer | (adrs_type << ADRS0_TYPE_SHIFT) | (tree_address << ADRS0_TREE_SHIFT))
+}
+
+/// adrs0 for FORS types: like `pack_adrs0` (layer fixed to 0) but additionally packs the
+/// FORS-internal tree number (0..SPX_FORS_TREES-1) into the high bits above tree_address.
+fn pack_adrs0_fors(adrs_type: u32, tree_address: u32, fors_tree: u32) -> F {
+    debug_assert!(adrs_type <= MAX_TYPE, "type out of range");
+    debug_assert!(tree_address <= MAX_TREE, "tree_address out of range");
+    debug_assert!(fors_tree <= MAX_FORS_TREE, "fors_tree out of range");
+    F::new((adrs_type << ADRS0_TYPE_SHIFT) | (tree_address << ADRS0_TREE_SHIFT) | (fors_tree << ADRS0_FORS_TREE_SHIFT))
 }
 
 fn pack_adrs1_wots(kp_addr: u32, chain: u32, hash: u32) -> F {
@@ -85,6 +108,7 @@ impl Adrs {
         Self {
             adrs0: pack_adrs0(layer, WOTS_HASH, tree_addr),
             adrs1: pack_adrs1_wots(kp_addr, chain, hash),
+            adrs2: F::new(0),
         }
     }
 
@@ -93,30 +117,38 @@ impl Adrs {
         Self {
             adrs0: pack_adrs0(layer, WOTS_PK, tree_addr),
             adrs1: pack_adrs1_wots(kp_addr, 0, 0),
+            adrs2: F::new(0),
         }
     }
 
     /// TREE: used for XMSS hypertree internal Merkle nodes.
+    /// The (tree_height, tree_index) Merkle coordinate stays in adrs1 (TREE layout); adrs2 unused.
     pub fn tree(layer: u32, tree_addr: u32, tree_height: u32, tree_index: u32) -> Self {
         Self {
             adrs0: pack_adrs0(layer, TREE, tree_addr),
             adrs1: pack_adrs1_tree(tree_height, tree_index),
+            adrs2: F::new(0),
         }
     }
 
     /// FORS_TREE: used for FORS binary tree internal nodes and leaf hashing (height=0).
-    pub fn fors_tree(tree_addr: u32, tree_height: u32, tree_index: u32) -> Self {
+    /// `idx_tree`/`idx_leaf` are the hypertree position (tree_address / key_pair_address);
+    /// `fors_tree` is the FORS-internal tree number (0..SPX_FORS_TREES-1).
+    pub fn fors_tree(idx_tree: u32, idx_leaf: u32, fors_tree: u32, tree_height: u32, tree_index: u32) -> Self {
         Self {
-            adrs0: pack_adrs0(0, FORS_TREE, tree_addr),
-            adrs1: pack_adrs1_tree(tree_height, tree_index),
+            adrs0: pack_adrs0_fors(FORS_TREE, idx_tree, fors_tree),
+            adrs1: F::new(idx_leaf),
+            adrs2: pack_adrs1_tree(tree_height, tree_index),
         }
     }
 
     /// FORS_ROOTS: used to fold the SPX_FORS_TREES roots into the FORS public key.
-    pub fn fors_roots(tree_addr: u32, kp_addr: u32) -> Self {
+    /// `idx_tree`/`idx_leaf` are the hypertree position; the per-step fold index lives in adrs2.
+    pub fn fors_roots(idx_tree: u32, idx_leaf: u32, step: u32) -> Self {
         Self {
-            adrs0: pack_adrs0(0, FORS_ROOTS, tree_addr),
-            adrs1: pack_adrs1_wots(kp_addr, 0, 0),
+            adrs0: pack_adrs0(0, FORS_ROOTS, idx_tree),
+            adrs1: F::new(idx_leaf),
+            adrs2: F::new(step),
         }
     }
 
@@ -125,15 +157,17 @@ impl Adrs {
         Self {
             adrs0: pack_adrs0(layer, WOTS_PRF, tree_addr),
             adrs1: pack_adrs1_wots(kp_addr, chain, 0),
+            adrs2: F::new(0),
         }
     }
 
     /// FORS_PRF: used to derive FORS leaf secrets from SK.seed (height=0, index=leaf_index).
-    /// kp_addr is not separately encoded; it is captured via tree_addr at the call site.
-    pub fn fors_prf(tree_addr: u32, _kp_addr: u32, leaf_index: u32) -> Self {
+    /// `idx_tree`/`idx_leaf` are the hypertree position; `fors_tree` is the FORS-internal tree.
+    pub fn fors_prf(idx_tree: u32, idx_leaf: u32, fors_tree: u32, leaf_index: u32) -> Self {
         Self {
-            adrs0: pack_adrs0(0, FORS_PRF, tree_addr),
-            adrs1: pack_adrs1_tree(0, leaf_index),
+            adrs0: pack_adrs0_fors(FORS_PRF, idx_tree, fors_tree),
+            adrs1: F::new(idx_leaf),
+            adrs2: pack_adrs1_tree(0, leaf_index),
         }
     }
 
@@ -145,6 +179,7 @@ impl Adrs {
         Self {
             adrs0: self.adrs0,
             adrs1: F::new(kp_addr | (chain << ADRS1_CHAIN_SHIFT)),
+            adrs2: self.adrs2,
         }
     }
 
@@ -157,6 +192,7 @@ impl Adrs {
         Self {
             adrs0: self.adrs0,
             adrs1: F::new((raw & ((1 << ADRS1_HASH_SHIFT) - 1)) | (hash << ADRS1_HASH_SHIFT)),
+            adrs2: self.adrs2,
         }
     }
 
@@ -168,10 +204,11 @@ impl Adrs {
         Self {
             adrs0: self.adrs0,
             adrs1: F::new((raw & ((1 << ADRS1_HASH_SHIFT) - 1)) | (hash << ADRS1_HASH_SHIFT)),
+            adrs2: self.adrs2,
         }
     }
 
-    /// Mirror of ADRS.setTypeAndClear from FIPS 205: change the type field in adrs0 and zero adrs1.
+    /// Mirror of ADRS.setTypeAndClear from FIPS 205: change the type field in adrs0 and zero adrs1/adrs2.
     pub fn set_type_and_clear(&mut self, adrs_type: u32) {
         debug_assert!(adrs_type <= MAX_TYPE);
         let raw = self.adrs0.as_canonical_u32();
@@ -180,6 +217,7 @@ impl Adrs {
         let tree = raw & !((1 << ADRS0_TREE_SHIFT) - 1);
         self.adrs0 = F::new(layer | (adrs_type << ADRS0_TYPE_SHIFT) | tree);
         self.adrs1 = F::new(0);
+        self.adrs2 = F::new(0);
     }
 }
 
@@ -238,6 +276,8 @@ mod tests {
         assert_eq!(l, 0);
         assert_eq!(t, TREE);
         assert_eq!(tr, 0x7FF);
+        // TREE keeps (tree_height, tree_index) in adrs1; adrs2 unused.
+        assert_eq!(adrs.adrs2.as_canonical_u32(), 0);
         let raw1 = adrs.adrs1.as_canonical_u32();
         assert_eq!(raw1 & MAX_TREE_IDX, MAX_TREE_IDX);
         assert_eq!((raw1 >> ADRS1_TREE_HT_SHIFT) & MAX_TREE_HT, SPX_FORS_HEIGHT as u32);
@@ -245,22 +285,32 @@ mod tests {
 
     #[test]
     fn test_fors_tree_roundtrip() {
-        let adrs = Adrs::fors_tree(0x10, 7, 0x1234);
-        let (_, t, tr) = unpack_adrs0(&adrs);
+        // idx_tree=0x10, idx_leaf=0x5, fors_tree=8, height=7, tree_index=0x1234
+        let adrs = Adrs::fors_tree(0x10, 0x5, 8, 7, 0x1234);
+        let (l, t, tr) = unpack_adrs0(&adrs);
+        assert_eq!(l, 0);
         assert_eq!(t, FORS_TREE);
         assert_eq!(tr, 0x10);
-        let raw1 = adrs.adrs1.as_canonical_u32();
-        assert_eq!(raw1 & MAX_TREE_IDX, 0x1234);
-        assert_eq!((raw1 >> ADRS1_TREE_HT_SHIFT) & MAX_TREE_HT, 7);
+        // fors_tree number packed above tree_address in adrs0.
+        assert_eq!((adrs.adrs0.as_canonical_u32() >> ADRS0_FORS_TREE_SHIFT) & 0xF, 8);
+        // idx_leaf (key_pair_address) in adrs1.
+        assert_eq!(adrs.adrs1.as_canonical_u32(), 0x5);
+        // (height, index) in adrs2.
+        let raw2 = adrs.adrs2.as_canonical_u32();
+        assert_eq!(raw2 & MAX_TREE_IDX, 0x1234);
+        assert_eq!((raw2 >> ADRS1_TREE_HT_SHIFT) & MAX_TREE_HT, 7);
     }
 
     #[test]
     fn test_fors_roots_roundtrip() {
-        let adrs = Adrs::fors_roots(0xABC, 0x7);
-        let (l, t, _) = unpack_adrs0(&adrs);
+        // idx_tree=0xABC, idx_leaf=0x7, step=3
+        let adrs = Adrs::fors_roots(0xABC, 0x7, 3);
+        let (l, t, tr) = unpack_adrs0(&adrs);
         assert_eq!(l, 0);
         assert_eq!(t, FORS_ROOTS);
+        assert_eq!(tr, 0xABC);
         assert_eq!(adrs.adrs1.as_canonical_u32() & MAX_KP_ADDR, 0x7);
+        assert_eq!(adrs.adrs2.as_canonical_u32(), 3);
     }
 
     #[test]
@@ -278,12 +328,17 @@ mod tests {
 
     #[test]
     fn test_fors_prf_roundtrip() {
-        let adrs = Adrs::fors_prf(0x5, 0x1, MAX_TREE_IDX);
-        let (l, t, _) = unpack_adrs0(&adrs);
+        // idx_tree=0x5, idx_leaf=0x1, fors_tree=4, leaf_index=MAX_TREE_IDX
+        let adrs = Adrs::fors_prf(0x5, 0x1, 4, MAX_TREE_IDX);
+        let (l, t, tr) = unpack_adrs0(&adrs);
         assert_eq!(l, 0);
         assert_eq!(t, FORS_PRF);
-        assert_eq!(adrs.adrs1.as_canonical_u32() & MAX_TREE_IDX, MAX_TREE_IDX);
-        assert_eq!((adrs.adrs1.as_canonical_u32() >> ADRS1_TREE_HT_SHIFT) & MAX_TREE_HT, 0);
+        assert_eq!(tr, 0x5);
+        assert_eq!((adrs.adrs0.as_canonical_u32() >> ADRS0_FORS_TREE_SHIFT) & 0xF, 4);
+        assert_eq!(adrs.adrs1.as_canonical_u32(), 0x1);
+        // leaf_index lives in adrs2 (height=0).
+        assert_eq!(adrs.adrs2.as_canonical_u32() & MAX_TREE_IDX, MAX_TREE_IDX);
+        assert_eq!((adrs.adrs2.as_canonical_u32() >> ADRS1_TREE_HT_SHIFT) & MAX_TREE_HT, 0);
     }
 
     #[test]

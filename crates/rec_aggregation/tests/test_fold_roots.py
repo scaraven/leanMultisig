@@ -7,6 +7,12 @@ def main():
     build_preamble_memory()
     pk_seed = Array(HALF_DIGEST_LEN)
     hint_witness("pk_seed", pk_seed)
+    idx_tree_buf = Array(1)
+    hint_witness("idx_tree", idx_tree_buf)
+    idx_tree = idx_tree_buf[0]
+    idx_leaf_buf = Array(1)
+    hint_witness("idx_leaf", idx_leaf_buf)
+    idx_leaf = idx_leaf_buf[0]
     roots = Array(SPX_FORS_TREES * HALF_DIGEST_LEN)
     hint_witness("roots", roots)
     expected_output = Array(HALF_DIGEST_LEN)
@@ -21,7 +27,7 @@ def main():
         fold_buf[SPX_FORS_TREES * HALF_DIGEST_LEN + i] = 0
 
     output = Array(HALF_DIGEST_LEN)
-    fold_roots(pk_seed, fold_buf, output)
+    fold_roots(pk_seed, idx_tree, idx_leaf, fold_buf, output)
     for i in unroll(0, HALF_DIGEST_LEN):
         assert expected_output[i] == output[i]
     return
