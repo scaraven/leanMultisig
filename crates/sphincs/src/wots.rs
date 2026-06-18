@@ -1,5 +1,4 @@
 use backend::*;
-use rand::{CryptoRng, RngExt};
 use serde::{Deserialize, Serialize};
 use utils::{ToUsize, poseidon16_compress_pair};
 
@@ -98,12 +97,14 @@ impl WotsSignature {
         Some(WotsPublicKey(std::array::from_fn(|i| {
             // Resume from the full 8-FE revealed tip and run the remaining steps, then truncate
             // the chain-final value to the 4-FE pubkey component.
-            truncate_half(iterate_hash_full_from_full(
-                self.chain_tips[i],
-                CHAIN_LENGTH - 1 - encoding[i] as usize,
-                pk_seed,
-                base_adrs.with_chain(i as u32).with_hash_step(encoding[i] as u32),
-            ))
+            let remaining = CHAIN_LENGTH - 1 - encoding[i] as usize;
+            let chain_adrs = base_adrs.with_chain(i as u32);
+            // When encoding[i] == CHAIN_LENGTH-1 there are zero remaining steps and the resume
+            // address is never consumed; the start hash_address would equal CHAIN_LENGTH-1, which
+            // is one past the last valid *step* address (MAX_HASH). Only set the resume step when
+            // a step actually follows, so with_hash_step is never asked for an out-of-range value.
+            let start_adrs = if remaining == 0 { chain_adrs } else { chain_adrs.with_hash_step(encoding[i] as u32) };
+            truncate_half(iterate_hash_full_from_full(self.chain_tips[i], remaining, pk_seed, start_adrs))
         })))
     }
 }
@@ -154,13 +155,18 @@ impl WotsPublicKey {
 /// exactly with the unsplit keygen chain.
 pub fn iterate_hash_full_from_full(a: Digest, n: usize, pk_seed: HalfDigest, adrs: Adrs) -> Digest {
     let mut current_adrs = adrs;
-    (0..n).fold(a, |acc, _| {
+    (0..n).fold(a, |acc, step| {
         let mut left = [F::ZERO; DIGEST_SIZE];
         left[..4].copy_from_slice(&pk_seed);
         left[4] = current_adrs.adrs0;
         left[5] = current_adrs.adrs1;
         let result = poseidon16_compress_pair(&left, &acc);
-        current_adrs = current_adrs.next_hash_step();
+        // Only advance the hash address when another step follows. The final step's increment
+        // would push hash_address one past MAX_HASH and is never consumed, so skipping it keeps
+        // every compression's address identical while avoiding the debug-only overflow assert.
+        if step + 1 < n {
+            current_adrs = current_adrs.next_hash_step();
+        }
         result
     })
 }
@@ -183,16 +189,18 @@ pub fn find_randomness_for_wots_encoding(
     message: &Digest,
     adrs0: F,
     adrs1: F,
-    rng: &mut impl CryptoRng,
 ) -> ([F; RANDOMNESS_LEN_FE], [u8; V], usize) {
-    let mut num_iters = 0;
-    loop {
-        num_iters += 1;
-        let randomness = rng.random();
+    // Deterministically scan randomness values starting from [0, 0, 0, 0, 0, 0], incrementing
+    // the first FE until an encoding with the correct TARGET_SUM is found. This is a signer-only
+    // change: the verifier only consumes the resulting randomness, not how it was discovered.
+    for i in 0..F::ORDER_U32 {
+        let mut randomness = [F::ZERO; RANDOMNESS_LEN_FE];
+        randomness[0] = F::from_usize(i as usize);
         if let Some(encoding) = wots_encode(message, adrs0, adrs1, &randomness) {
-            return (randomness, encoding, num_iters);
+            return (randomness, encoding, i as usize);
         }
     }
+    panic!("exhausted all randomness values without finding a valid encoding");
 }
 
 /// Encode (message, adrs0, adrs1, randomness) into V chain indices.
@@ -238,8 +246,6 @@ mod tests {
 
     #[test]
     fn test_wots_sign_recover_roundtrip() {
-        let mut rng = rand::rng();
-
         let message = poseidon16_compress_pair(&Digest::default(), &Digest::default());
         let adrs0 = F::new(0);
         let adrs1 = F::new(0);
@@ -256,7 +262,7 @@ mod tests {
         let base_adrs = Adrs::wots_hash(0, 0, 0, 0, 0);
         let sk = WotsSecretKey::new(pre_images, pk_seed, base_adrs);
 
-        let (randomness, _encoding, _iters) = find_randomness_for_wots_encoding(&message, adrs0, adrs1, &mut rng);
+        let (randomness, _encoding, _iters) = find_randomness_for_wots_encoding(&message, adrs0, adrs1);
 
         let sig = sk.sign_with_randomness(&message, adrs0, adrs1, randomness, pk_seed, base_adrs);
         let recovered = sig

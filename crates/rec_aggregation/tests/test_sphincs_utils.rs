@@ -112,7 +112,7 @@ fn test_sphincs_wots_encode_complete() {
             // adrs0/adrs1 encode (layer=0, tree=0, kp=0) — matches the unit test's zero-address convention
             let adrs = Adrs::wots_hash(layer_index, 0, 0, 0, 0);
             let (randomness, encoding, _) =
-                find_randomness_for_wots_encoding(&message, adrs.adrs0, adrs.adrs1, &mut rng);
+                find_randomness_for_wots_encoding(&message, adrs.adrs0, adrs.adrs1);
 
             // chain_tips[i] = iterate_hash_full_from_full(preimage[i], encoding[i]) — 8-FE revealed tip
             let chain_tips: [Digest; SPX_WOTS_LEN] = std::array::from_fn(|i| {
@@ -162,7 +162,7 @@ fn test_sphincs_wots_encode_complete() {
 
             let adrs = Adrs::wots_hash(layer_index, 0, 0, 0, 0);
             let (randomness, encoding, _) =
-                find_randomness_for_wots_encoding(&message, adrs.adrs0, adrs.adrs1, &mut rng);
+                find_randomness_for_wots_encoding(&message, adrs.adrs0, adrs.adrs1);
 
             let chain_tips: [Digest; SPX_WOTS_LEN] = std::array::from_fn(|i| {
                 iterate_hash_full_from_full(
@@ -245,7 +245,7 @@ fn test_sphincs_wots_encode_complete() {
 
             let adrs = Adrs::wots_hash(layer_index, 0, 0, 0, 0);
             let (randomness, encoding, _) =
-                find_randomness_for_wots_encoding(&message, adrs.adrs0, adrs.adrs1, &mut rng);
+                find_randomness_for_wots_encoding(&message, adrs.adrs0, adrs.adrs1);
 
             // Shift each chain tip one step beyond its correct signing position.
             let chain_tips: [Digest; SPX_WOTS_LEN] = std::array::from_fn(|i| {

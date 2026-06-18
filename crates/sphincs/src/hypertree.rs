@@ -214,7 +214,6 @@ pub fn hypertree_sign(
     tree_address: usize,
 ) -> HypertreeSignature {
     let mut current_message = *message;
-    let mut rng = rand::rng();
 
     let layers: [HypertreeLayerSig; SPX_D] = std::array::from_fn(|layer| {
         let (layer_tree_address, layer_leaf_index, _) = calculate_address_info(leaf_index, tree_address, layer);
@@ -224,7 +223,7 @@ pub fn hypertree_sign(
         let preimages = derive_wots_preimages(sk.sk_seed, sk.pk_seed, layer, layer_tree_address, layer_leaf_index);
         let adrs = Adrs::wots_hash(layer as u32, layer_tree_address as u32, layer_leaf_index as u32, 0, 0);
         let wots_sk = WotsSecretKey::new(preimages, sk.pk_seed, adrs);
-        let (randomness, _, _) = find_randomness_for_wots_encoding(&current_message, adrs.adrs0, adrs.adrs1, &mut rng);
+        let (randomness, _, _) = find_randomness_for_wots_encoding(&current_message, adrs.adrs0, adrs.adrs1);
         let wots_sig =
             wots_sk.sign_with_randomness(&current_message, adrs.adrs0, adrs.adrs1, randomness, sk.pk_seed, adrs);
 
