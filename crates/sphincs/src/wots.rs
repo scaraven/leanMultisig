@@ -103,8 +103,17 @@ impl WotsSignature {
             // address is never consumed; the start hash_address would equal CHAIN_LENGTH-1, which
             // is one past the last valid *step* address (MAX_HASH). Only set the resume step when
             // a step actually follows, so with_hash_step is never asked for an out-of-range value.
-            let start_adrs = if remaining == 0 { chain_adrs } else { chain_adrs.with_hash_step(encoding[i] as u32) };
-            truncate_half(iterate_hash_full_from_full(self.chain_tips[i], remaining, pk_seed, start_adrs))
+            let start_adrs = if remaining == 0 {
+                chain_adrs
+            } else {
+                chain_adrs.with_hash_step(encoding[i] as u32)
+            };
+            truncate_half(iterate_hash_full_from_full(
+                self.chain_tips[i],
+                remaining,
+                pk_seed,
+                start_adrs,
+            ))
         })))
     }
 }
