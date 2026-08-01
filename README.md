@@ -8,6 +8,8 @@ Minimal hash-based zkVM, targeting recursion and aggregation of hash-based signa
 
 Documentation: [PDF](minimal_zkVM.pdf)
 
+MEng thesis on SNARK aggregation of post-quantum SPHINCS+ signatures using leanVM: [Shrinking SPHINCS+](docs/README.md) ([PDF](https://github.com/scaraven/leanMultisig/blob/main/docs/FYP-Shrinking-SPHINCS+.pdf))
+
 ## Proving System
 
 
