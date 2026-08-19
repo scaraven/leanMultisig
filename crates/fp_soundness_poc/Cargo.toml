@@ -1,0 +1,14 @@
+[package]
+name = "fp_soundness_poc"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+lean_vm.workspace = true
+lean_compiler.workspace = true
+lean_prover.workspace = true
+sub_protocols.workspace = true
+backend.workspace = true

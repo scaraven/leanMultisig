@@ -24,16 +24,48 @@ pub fn prove_execution(
     vm_profiler: bool,
 ) -> Result<ExecutionProof, ProverError> {
     check_rate(whir_config.starting_log_inv_rate).map_err(|_| ProverError::InvalidRate)?;
-    let ExecutionTrace {
-        traces,
-        mut memory, // padded with zeros to next power of two
-        metadata,
-    } = info_span!("Witness generation").in_scope(|| -> Result<_, ProverError> {
+    let execution_trace = info_span!("Witness generation").in_scope(|| -> Result<_, ProverError> {
         let execution_result = info_span!("Executing bytecode")
             .in_scope(|| try_execute_bytecode(bytecode, public_input, witness, vm_profiler))?;
         Ok(info_span!("Building execution trace")
             .in_scope(|| get_execution_trace(bytecode, execution_result, &witness.min_table_log_n_rows)))
     })?;
+    prove_from_execution_trace(bytecode, execution_trace, public_input, whir_config)
+}
+
+/// Soundness-PoC seam (audit finding F-2). Prove directly from an already-produced
+/// [`ExecutionResult`], bypassing the honest runner. The result is turned into the
+/// committed trace by the *same* [`get_execution_trace`] the honest path uses, then
+/// handed to the *unchanged* prover — so a forged `ExecutionResult` (e.g. one with an
+/// out-of-range frame pointer the runner would never emit) produces a real proof that
+/// the canonical [`crate::verify_execution::verify_execution`] then checks. This exists
+/// only to demonstrate the frame-pointer under-constraint; the honest entry point is
+/// [`prove_execution`].
+pub fn prove_from_execution_result(
+    bytecode: &Bytecode,
+    execution_result: ExecutionResult,
+    public_input: &[F; PUBLIC_INPUT_LEN],
+    whir_config: &WhirConfigBuilder,
+) -> Result<ExecutionProof, ProverError> {
+    check_rate(whir_config.starting_log_inv_rate).map_err(|_| ProverError::InvalidRate)?;
+    let execution_trace = get_execution_trace(bytecode, execution_result, &BTreeMap::new());
+    prove_from_execution_trace(bytecode, execution_trace, public_input, whir_config)
+}
+
+/// The prover proper: everything after witness generation. Shared verbatim by the
+/// honest [`prove_execution`] and the PoC [`prove_from_execution_result`], so both
+/// exercise identical commitment / logup / AIR-sumcheck / WHIR code.
+fn prove_from_execution_trace(
+    bytecode: &Bytecode,
+    execution_trace: ExecutionTrace,
+    public_input: &[F; PUBLIC_INPUT_LEN],
+    whir_config: &WhirConfigBuilder,
+) -> Result<ExecutionProof, ProverError> {
+    let ExecutionTrace {
+        traces,
+        mut memory, // padded with zeros to next power of two
+        metadata,
+    } = execution_trace;
 
     // Memory must be at least MIN_LOG_MEMORY_SIZE and at least bytecode size
     // (required by the stacked polynomial ordering)
